@@ -18,7 +18,8 @@ setup(
               'offsb/op',
               'offsb/tools',
               'offsb/search',
-              'offsb/qcarchive'],
+              'offsb/qcarchive',
+              'treedi'],
     
     install_requires=requirements,
     keywords='openff-spellbook',
