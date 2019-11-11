@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import openforcefield_spellbook.tools.const as const
+import offsb.tools.const as const
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt

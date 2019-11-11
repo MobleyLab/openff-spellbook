@@ -5,7 +5,7 @@ import matplotlib.cm as cm
 import itertools
 import numpy as np
 
-import openff-spellbook.tools.const as const
+import offsb.tools.const as const
 
 with open('oFF-1.1.0.p', 'rb') as fid:
     print("Loading oFF data")

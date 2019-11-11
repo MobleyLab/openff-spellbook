@@ -1,5 +1,5 @@
 import pickle
-import openff_spellbook.qcarchive.qcatree as qca
+import offsb.qcarchive.qcatree as qca
 with open("QCA.p", 'rb') as fid:
     QCA = pickle.load(fid)
 with open("QCA.db.p", 'rb') as fid:

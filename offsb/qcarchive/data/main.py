@@ -1,5 +1,5 @@
 
-import openff_spellbook.qcarchive.quick as quick
+import offsb.qcarchive.quick as quick
 
 QCA = quick.load()
 #quick.process( QCA)
