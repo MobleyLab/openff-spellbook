@@ -38,6 +38,11 @@ class QCATree( Tree.Tree):
         from qcfractal.interface.models.records \
             import OptimizationRecord
 
+        from qcfractal.interface.collections.gridoptimization_dataset \
+            import GridOptimizationDataset
+        from qcfractal.interface.models.records \
+            import GridOptimizationRecord
+
         if isinstance( obj, TorsionDriveDataset):
             return self.branch_torsiondrive_ds
         elif isinstance( obj, TorsionDriveRecord): 
@@ -46,6 +51,10 @@ class QCATree( Tree.Tree):
             return self.branch_optimization_ds
         elif isinstance( obj, OptimizationRecord):
             return self.branch_optimization_record
+        elif isinstance( obj, GridOptimizationDataset):
+            return self.branch_gridopt_ds
+        elif isinstance( obj, OptimizationRecord):
+            return self.branch_gridopt_record
 
         raise ValueError("QCA type '" + str(type(obj)) + "' not understood")
         return None
@@ -524,6 +533,62 @@ class QCATree( Tree.Tree):
     def branch_optimization_ds( self, node, skel=False):
         """ Generate the individual optimizations """
         self.branch_ds( node, "Optimization", self.branch_optimization_record, skel=skel)
+
+    def branch_gridopt_ds( self, node, skel=False):
+        """ Generate the individual optimizations """
+        self.branch_ds( node, "GridOpt", self.branch_gridopt_record, skel=skel)
+
+    def branch_gridopt_record( self, nids, skel=False):
+        """ Generate the optimizations under Grid Optimization record
+        The optimizations are separated by one or more Constraints
+        """
+        if "GridOpt" in self.drop:
+            return
+        
+        if not hasattr( nids, "__iter__"):
+            nids = [nids]
+        nodes = [self.node_index.get( nid) for nid in nids]
+        #print( nodes)
+        #print( self.db)
+        #assert False
+        opt_ids = [list( self.db.get( node.payload).get( "data").get( "grid_optimizations").values()) for node in nodes]
+        client = self.db.get( "ROOT").get( "data")
+        #client = get_root( nodes[0]).payload
+        print("Downloading optimization information for", len( flatten_list( opt_ids, times=-1)))
+        
+        #projection = { 'optimization_history': True } if skel else None
+        projection = None
+        flat_ids = ['QCP-' + str(x) for x in flatten_list( opt_ids, times=-1)]
+        opt_map = self.batch_download( flat_ids, client.query_procedures, projection=projection)
+        
+        # add the constraint nodes
+        if "Constraint" in self.drop:
+            return
+        opt_nodes = []
+
+        # have the opt map, which is the optimizations with their ids
+        # nodes are the torsiondrives
+        for node in nodes:
+            obj = self.db.get( node.payload)
+            for constraint, opts in obj.get( "data").get( "grid_optimizations").items():
+                constraint_node = Node.Node( payload=constraint , name="Constraint")
+                self.add( node.index, constraint_node)
+                
+                for index in opts:
+                    index = 'QCP-' + index
+                    opt_node = Node.Node( name="Optimization", payload=index)
+                    opt_nodes.append( opt_node)
+                    self.add( constraint_node.index, opt_node)
+                    self.db.__setitem__( index, { "data": opt_map.get( index) })
+        #for i,n in enumerate(opt_nodes[:-1]):
+        #    idx = n.index
+        #    for j,m in enumerate(opt_nodes[i+1:],i+1):
+        #        assert idx != m.index
+        self.branch_optimization_record( [x.index for x in opt_nodes], skel=skel)
+        
+        #for group in opt_ids:
+         #   for opt in group:
+
 
     def branch_torsiondrive_record( self, nids, skel=False):
         """ Generate the optimizations under a TD or an Opt dataset
