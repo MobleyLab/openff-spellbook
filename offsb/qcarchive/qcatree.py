@@ -40,7 +40,7 @@ class QCATree( Tree.Tree):
 
         from qcfractal.interface.collections.gridoptimization_dataset \
             import GridOptimizationDataset
-        from qcfractal.interface.models.records \
+        from qcfractal.interface.models.gridoptimization \
             import GridOptimizationRecord
 
         if isinstance( obj, TorsionDriveDataset):
@@ -352,7 +352,7 @@ class QCATree( Tree.Tree):
             elapsed = datetime.now()
             objs += [dict(obj) for obj in \
                 fn( molecule=ids[i:j], driver="hessian", \
-                    limit=max_query, projection=projection)]
+                    limit=max_query, include=projection)]
 
             elapsed = str(datetime.now() - elapsed)
             #if i == 0:
@@ -399,7 +399,7 @@ class QCATree( Tree.Tree):
                 else:
                     objs += [dict(obj) for obj in fn( ids[i:j], \
                                                       limit=max_query, \
-                                                      projection=projection)]
+                                                      include=projection)]
             else:
                 kw = { "limit": max_query, "procedure": procedure }
                 if projection is not None:
@@ -566,20 +566,25 @@ class QCATree( Tree.Tree):
             return
         opt_nodes = []
 
-        # have the opt map, which is the optimizations with their ids
-        # nodes are the torsiondrives
         for node in nodes:
             obj = self.db.get( node.payload)
             for constraint, opts in obj.get( "data").get( "grid_optimizations").items():
+                #TODO need to cross ref the index to the actual constraint val
                 constraint_node = Node.Node( payload=constraint , name="Constraint")
                 self.add( node.index, constraint_node)
                 
-                for index in opts:
-                    index = 'QCP-' + index
-                    opt_node = Node.Node( name="Optimization", payload=index)
-                    opt_nodes.append( opt_node)
-                    self.add( constraint_node.index, opt_node)
-                    self.db.__setitem__( index, { "data": opt_map.get( index) })
+                #for index in opts:
+                #    index = 'QCP-' + index
+                #    opt_node = Node.Node( name="Optimization", payload=index)
+                #    opt_nodes.append( opt_node)
+                #    self.add( constraint_node.index, opt_node)
+                #    self.db.__setitem__( index, { "data": opt_map.get( index) })
+
+                index = 'QCP-' + opts
+                opt_node = Node.Node( name="Optimization", payload=index)
+                opt_nodes.append( opt_node)
+                self.add( constraint_node.index, opt_node)
+                self.db.__setitem__( index, { "data": opt_map.get( index) })
         #for i,n in enumerate(opt_nodes[:-1]):
         #    idx = n.index
         #    for j,m in enumerate(opt_nodes[i+1:],i+1):
@@ -714,6 +719,7 @@ class QCATree( Tree.Tree):
         if len(gradstubs) > 0:
             print( "Downloading molecule information from grad stubs", len( gradstubs))
             projection = { 'id': True, 'molecule': True }
+            projection = [ 'id', 'molecule']
             mol_map = self.batch_download( [node.payload for node in gradstubs], client.query_results, projection=projection )
             for node in gradstubs:
                 obj = self.db.get( node.payload).get( "data")
@@ -755,6 +761,7 @@ class QCATree( Tree.Tree):
 
         if skel:
             projection = { 'id': True , 'molecule': True }
+            projection = [ 'id', 'molecule' ]
             name = "HessianStub"
         
         print( "Downloading", name, "for", len(mol_nodes))

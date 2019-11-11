@@ -74,7 +74,10 @@ class OpenForceFieldTree( treedi.tree.PartitionTree):
             #if n == 2:
             #    break
             attrs = self.source.db.get( target.payload).get( 'entry').dict().get( 'attributes')
-            qcmolid = 'QCM-' + str(self.source.db.get( target.payload).get( 'data').get( 'initial_molecule')[0])
+            qcid = self.source.db.get( target.payload).get( 'data').get( 'initial_molecule')
+            if isinstance(qcid, list):
+                qcid = str(qcid[0])
+            qcmolid = 'QCM-' + qcid
             qcmol = self.source.db.get( qcmolid).get( "data")
             #print("INITIAL MOL:", qcmol.get( "geometry").shape )
             smiles_pattern = attrs.get( 'canonical_isomeric_explicit_hydrogen_mapped_smiles')
