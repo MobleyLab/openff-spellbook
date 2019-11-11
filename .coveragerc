@@ -1,0 +1,7 @@
+[report]
+omit =
+    setup.py
+    openff-spellbook/__main__.py
+    openff-spellbook/_version.py
+    versioneer.py
+    tests/*
