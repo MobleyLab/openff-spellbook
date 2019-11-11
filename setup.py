@@ -14,7 +14,11 @@ setup(
     author="Trevor Gokey",
     author_email='tgokey@uci.edu',
     url='https://github.com/trevorgokey/openff-spellbook',
-    packages=['offsb'],
+    packages=['offsb',
+              'offsb/op',
+              'offsb/tools',
+              'offsb/search',
+              'offsb/qcarchive'],
     
     install_requires=requirements,
     keywords='openff-spellbook',
