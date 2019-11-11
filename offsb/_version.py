@@ -42,8 +42,8 @@ def get_config():
     cfg.VCS = "git"
     cfg.style = ""
     cfg.tag_prefix = ""
-    cfg.parentdir_prefix = "openff-spellbook-"
-    cfg.versionfile_source = "openff-spellbook/_version.py"
+    cfg.parentdir_prefix = "offsb-"
+    cfg.versionfile_source = "offsb/_version.py"
     cfg.verbose = False
     return cfg
 
