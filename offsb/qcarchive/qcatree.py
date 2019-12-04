@@ -680,7 +680,6 @@ class QCATree( Tree.Tree):
             #node = self.node_index.get( node.index)
             obj = self.db.get( node.payload)
             traj = obj.get( "data").get( "trajectory")
-            assert traj is not None and len(traj) > 0
             if traj is not None and len(traj) > 0: 
                 for index in traj:
                     index = suf + index
@@ -690,6 +689,8 @@ class QCATree( Tree.Tree):
                     self.add( node.index, result_node)
                     pl = {} if skel else result_map.get( index)
                     self.db.__setitem__( index, { "data" : pl } )
+            else:
+                print("No gradient information for", node,": Not complete?")
                         
         self.branch_result_record( [x.index for x in result_nodes], skel=skel)
 
@@ -805,7 +806,8 @@ class QCATree( Tree.Tree):
             nodes = [nodes]
         for top_node in nodes:
             for opt_node in fn( self, top_node, select="Optimization"):
-                yield self.node_index.get( self.node_index.get( opt_node.children[-1]).children[0])
+                if len( opt_node.children) > 0:
+                    yield self.node_index.get( self.node_index.get( opt_node.children[-1]).children[0])
                 #yield from fn( opt_node.children[-1], select=select)
 
     def node_iter_entry( self, nodes, select=None, fn=Tree.Tree.node_iter_depth_first):

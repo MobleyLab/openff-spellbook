@@ -2,10 +2,15 @@
 import itertools
 
 def flatten_list(l, times=1):
+    print("FLATTEN: list is", len(l))
     if times == 0: return l
     if times == -1:
         if isinstance( l[0], list):
-            return flatten_list([a for b in l for a in b], times)
+            try:
+                ll = [a for b in l for a in b ]
+                return flatten_list(ll, times)
+            except TypeError:
+                return list() 
         else:
             return l
     else:

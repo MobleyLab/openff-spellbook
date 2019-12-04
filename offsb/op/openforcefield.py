@@ -23,7 +23,16 @@ class OpenForceFieldTree( treedi.tree.PartitionTree):
         level = logger.getEffectiveLevel()
         logger.setLevel(level=logging.ERROR)
         self.filename = filename
-        self.abs_path = os.path.join( ff.get_forcefield_dirs_paths()[0], self.filename)
+        from pkg_resources import iter_entry_points
+        for entry_point in iter_entry_points(group='openforcefield.smirnoff_forcefield_directory'):
+            pth = entry_point.load()()[0]
+            abspth = os.path.join(pth, filename)
+            print("Searching", abspth)
+            if os.path.exists( abspth):
+                self.abs_path = abspth
+                print("Found")
+                break
+            raise Exception("Forcefield could not be found")
         self.forcefield= oFF.typing.engines.smirnoff.ForceField( self.abs_path, disable_version_check=True)
         logger.setLevel(level=level)
         print("My db is", self.db)
@@ -83,9 +92,11 @@ class OpenForceFieldTree( treedi.tree.PartitionTree):
             smiles_pattern = attrs.get( 'canonical_isomeric_explicit_hydrogen_mapped_smiles')
             #print( smiles_pattern)
             mol = Chem.MolFromSmiles( smiles_pattern, sanitize=False)
+            #print([m.GetSymbol() for m in mol.GetAtoms()])
             Chem.SanitizeMol( mol, Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_ADJUSTHS ^ Chem.SanitizeFlags.SANITIZE_SETAROMATICITY)
             Chem.SetAromaticity( mol, Chem.AromaticityModel.AROMATICITY_MDL)
             Chem.SanitizeMol( mol, Chem.SanitizeFlags.SANITIZE_SETAROMATICITY)
+            #print([m.GetSymbol() for m in mol.GetAtoms()])
 
             map_idx = { a.GetIdx() : a.GetAtomMapNum() for a in mol.GetAtoms()}
 #            Chem.rdmolops.AssignStereochemistry( mol, cleanIt=True, force=True, flagPossibleStereoCenters=False)
@@ -123,8 +134,20 @@ class OpenForceFieldTree( treedi.tree.PartitionTree):
 
             #link_obj = self.db.get( self.node_index.get( target.index).payload)
             mmol = oFF.topology.Molecule.from_rdkit( mol, allow_undefined_stereo=True)
-            top = oFF.topology.Topology().from_molecules( mmol)
+            #print(mmol.to_smiles())
+            #top = oFF.topology.Topology(other=mmol)
+
+            # just skip molecules that oFF can't handle for whatever reason
+            try:
+                top = oFF.topology.Topology.from_molecules(mmol)
+            except AssertionError as e:
+                print("FAILED TO BUILD OFF MOL:")
+                print(e)
+                continue
             labels = self.forcefield.label_molecules( top)[0]
+            #labels = labels[0]
+            #print( labels)
+            #print( type(labels))
             mapped_labels = {}
 
             keys = ['Bonds', 'Angles', 'ProperTorsions', 'vdW', 'ImproperTorsions', 'Electrostatics', 'ToolkitAM1BCC']

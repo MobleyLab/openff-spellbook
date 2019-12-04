@@ -27,8 +27,17 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
         logger = logging.getLogger()
         level = logger.getEffectiveLevel()
         logger.setLevel(level=logging.ERROR)
+        from pkg_resources import iter_entry_points
         self.filename = filename
-        self.abs_path = os.path.join( ff.get_forcefield_dirs_paths()[0], self.filename)
+        for entry_point in iter_entry_points(group='openforcefield.smirnoff_forcefield_directory'):
+            pth = entry_point.load()()[0]
+            abspth = os.path.join(pth, filename)
+            print("Searching", abspth)
+            if os.path.exists( abspth):
+                self.abs_path = abspth
+                print("Found")
+                break
+            raise Exception("Forcefield could not be found")
         self.forcefield= oFF.typing.engines.smirnoff.ForceField( self.abs_path, disable_version_check=True)
         logger.setLevel(level=level)
         print("My db is", self.db)
@@ -65,9 +74,11 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
             #    break
             attrs = self.source.db.get( target.payload).get( 'entry').dict().get( 'attributes')
             qcmolid = self.source.db.get( target.payload).get( 'data').get( 'initial_molecule')
+
             if isinstance( qcmolid, list):
                 qcmolid = qcmolid[0]
             qcmolid = 'QCM-' + str( qcmolid)
+            print(qcmolid)
             qcmol = self.source.db.get( qcmolid).get( "data")
             smiles_pattern = attrs.get( 'canonical_isomeric_explicit_hydrogen_mapped_smiles')
             mol = Chem.MolFromSmiles( smiles_pattern, sanitize=False)
@@ -94,11 +105,14 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
                         minidx = opt.children[-1]
                 
 
+                if minidx == None:
+                    print("EMPTY. SKIPPING")
+                    continue
                 grad_node = self.source.node_index[ minidx]
                 mol_node  = self.source.node_index[ grad_node.children[0]]
                 qcmol = self.source.db[ mol_node.payload][ 'data']
 
-                print("min mol is", mol_node, "ene is", minene)
+                print("min mol is", mol_node, "ene is", minene, "au")
 
             xyz = qcmol.get( "geometry")
             sym = qcmol.get( "symbols")
@@ -119,25 +133,26 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
                 xyz = xyz * const.bohr2angstrom
                 xyz = unmap( xyz, map_idx)
                 total_ene = self.calc_mm_energy( top, xyz, charge=gen_MM_charge)
-                print("    ", mol_node, total_ene)
+                constraints = [c.payload for c in self.source.node_iter_to_root( mol_node, select="Constraint")]
+                print("    ", mol_node, constraints, total_ene)
                 self.db.__setitem__( mol_node.payload, { "data": { "energy": total_ene }})
                 
 
     def mm_potential(self, forcefield, top, xyz, charge=False):
         
         if isinstance( charge, bool):
-            if(charge):
-                system = forcefield.create_openmm_system(top)
+            if( charge):
+                system = forcefield.create_openmm_system( top)
             else:
                 mols = [Molecule(mol.reference_molecule) for mol in top.topology_molecules]
                 for i,_ in enumerate(mols):
-                    mols[i].partial_charges = simtk.unit.Quantity(np.zeros(mols[i].n_atoms), simtk.unit.elementary_charge)
+                    mols[i].partial_charges = simtk.unit.Quantity( np.zeros( mols[i].n_atoms), simtk.unit.elementary_charge)
                 system = forcefield.create_openmm_system(top, charge_from_molecules=mols)
         else:
-            mols = [Molecule(mol.reference_molecule) for mol in top.topology_molecules]
-            for i,_ in enumerate(mols):
-                mols[i].partial_charges = charge[i]
-            system = forcefield.create_openmm_system(top, charge_from_molecules=mols)
+            mols = [Molecule( mol.reference_molecule) for mol in top.topology_molecules]
+            for i,_ in enumerate( mols):
+                mols[ i].partial_charges = charge[ i]
+            system = forcefield.create_openmm_system( top, charge_from_molecules=mols)
 
                                            
         integrator = openmm.VerletIntegrator(1.0 * simtk.unit.femtoseconds)
