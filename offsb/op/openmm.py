@@ -15,6 +15,7 @@ import smirnoff99frosst as ff
 from rdkit import Chem
 from rdkit.Chem import AllChem
 from rdkit.Chem import FragmentMatcher
+from rdkit import Geometry as RDGeom
 from ..tools import const
 from .. import qcarchive as qca
 import copy
@@ -92,14 +93,22 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
             Chem.SanitizeMol( mol, Chem.SanitizeFlags.SANITIZE_SETAROMATICITY)
 
             map_idx = { a.GetIdx() : a.GetAtomMapNum() for a in mol.GetAtoms()}
-            ids = AllChem.EmbedMultipleConfs( mol, numConfs=1)
-            try:
-                conf = mol.GetConformer(ids[0])
-            except IndexError:
+            ret = AllChem.EmbedMolecule( mol, coordMap={i : RDGeom.Point3D(*qcmol.get("geometry")[ map_idx[ i]-1] * const.bohr2angstrom) for i in map_idx}  )
+            if ret < 0:
                 print("ERROR: Could not generate a conformation in RDKit.", qcmolid, target.payload)
                 qca.qcmol_to_xyz( qcmol, 
                     fnm="mol."+qcmolid+"."+target.payload+".rdconfgenfail.xyz", comment=qcmolid + " rdconfgen fail " + target.payload)
                 continue
+            conf = mol.GetConformer()
+            #ids = AllChem.EmbedMultipleConfs( mol, numConfs=1)
+            #try:
+            #    conf = mol.GetConformer(ids[0])
+            #except IndexError:
+            #    print("ERROR: Could not generate a conformation in RDKit.", qcmolid, target.payload)
+            #    qca.qcmol_to_xyz( qcmol, 
+            #        fnm="mol."+qcmolid+"."+target.payload+".rdconfgenfail.xyz", comment=qcmolid + " rdconfgen fail " + target.payload)
+            #    continue
+            #conf = mol.GetConformer(ids[0])
 
             
 
@@ -135,11 +144,13 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
 
             xyz = qcmol.get( "geometry")
             sym = qcmol.get( "symbols")
-            for i, a in enumerate(mol.GetAtoms()):
-                conf.SetAtomPosition(i, xyz[ map_idx[ i] - 1] * const.bohr2angstrom)
+            #for i, a in enumerate(mol.GetAtoms()):
+            #    conf.SetAtomPosition(i, xyz[ map_idx[ i] - 1] * const.bohr2angstrom)
 
-            Chem.rdmolops.AssignStereochemistryFrom3D( mol, ids[0], replaceExistingTags=True)
-            Chem.rdmolops.AssignAtomChiralTagsFromStructure( mol, ids[0], replaceExistingTags=True)
+            #Chem.rdmolops.AssignStereochemistryFrom3D( mol, ids[0], replaceExistingTags=True)
+            #Chem.rdmolops.AssignStereochemistryFrom3D( mol, ids[0], replaceExistingTags=True)
+            Chem.rdmolops.AssignAtomChiralTagsFromStructure( mol, -1, replaceExistingTags=True)
+            Chem.rdmolops.AssignAtomChiralTagsFromStructure( mol, -1, replaceExistingTags=True)
 
             mmol = oFF.topology.Molecule.from_rdkit( mol, allow_undefined_stereo=True)
             try:
