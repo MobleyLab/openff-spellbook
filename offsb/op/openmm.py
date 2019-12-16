@@ -85,7 +85,9 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
             qcmol = self.source.db.get( qcmolid).get( "data")
             smiles_pattern = attrs.get( 'canonical_isomeric_explicit_hydrogen_mapped_smiles')
             mol = Chem.MolFromSmiles( smiles_pattern, sanitize=False)
-            Chem.SanitizeMol( mol, Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_ADJUSTHS ^ Chem.SanitizeFlags.SANITIZE_SETAROMATICITY)
+            Chem.SanitizeMol( mol, Chem.SanitizeFlags.SANITIZE_ALL ^ \
+                    Chem.SanitizeFlags.SANITIZE_ADJUSTHS ^ \
+                    Chem.SanitizeFlags.SANITIZE_SETAROMATICITY)
             Chem.SetAromaticity( mol, Chem.AromaticityModel.AROMATICITY_MDL)
             Chem.SanitizeMol( mol, Chem.SanitizeFlags.SANITIZE_SETAROMATICITY)
 
@@ -94,9 +96,9 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
             try:
                 conf = mol.GetConformer(ids[0])
             except IndexError:
-                print("ERROR: Could not generate a conformation in RDKit.", qcmolid)
+                print("ERROR: Could not generate a conformation in RDKit.", qcmolid, target.payload)
                 qca.qcmol_to_xyz( qcmol, 
-                    fnm="mol."+qcmolid+".rdconfgenfail.xyz", comment=qcmolid + " rdconfgen fail")
+                    fnm="mol."+qcmolid+"."+target.payload+".rdconfgenfail.xyz", comment=qcmolid + " rdconfgen fail " + target.payload)
                 continue
 
             
@@ -116,9 +118,9 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
                             minene = ene
                             minidx = opt.children[-1]
                 except TypeError:
-                    print("ERROR: No energies.", qcmolid) # ene is not a list above
+                    print("ERROR: No energies.", qcmolid, target.payload) # ene is not a list above
                     qca.qcmol_to_xyz( qcmol, 
-                        fnm="mol."+qcmolid+".noenefail.xyz", comment=qcmolid + " noene fail")
+                        fnm="mol."+qcmolid+"."+target.payload+".noenefail.xyz", comment=qcmolid + " noene fail " + target.payload)
                     continue
                 
 
@@ -143,17 +145,17 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
             try:
                 top = oFF.topology.Topology().from_molecules( mmol)
             except AssertionError:
-                print("ERROR: Could not setup molecule in oFF.", qcmolid)
+                print("ERROR: Could not setup molecule in oFF.", qcmolid, target.payload)
                 qca.qcmol_to_xyz( qcmol, 
-                    fnm="mol."+qcmolid+".offmolfail.xyz", comment=qcmolid + " oFF fail")
+                    fnm="mol."+qcmolid+"."+target.payload+".offmolfail.xyz", comment=qcmolid + " oFF fail " + target.payload)
                 #pdb.set_trace()
                 continue
             try:
                 mmol.compute_partial_charges_am1bcc()
             except Exception:
-                print("ERROR: Could not compute partial charge.", qcmolid)
+                print("ERROR: Could not compute partial charge.", qcmolid, target.payload)
                 qca.qcmol_to_xyz( qcmol, 
-                    fnm="mol."+qcmolid+".chrgfail.xyz", comment=qcmolid + " charge fail")
+                    fnm="mol."+qcmolid+"."+target.payload+".chrgfail.xyz", comment=qcmolid + " charge fail "+target.payload)
                 #pdb.set_trace()
                 continue
             gen_MM_charge = [mmol.partial_charges]
@@ -169,23 +171,23 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
                     total_ene = self.calc_mm_energy( top, xyz, charge=gen_MM_charge)
                     fail = False
                 except UnassignedProperTorsionParameterException as e:
-                    print("ERROR: oFF could not assign torsion:")
+                    print("ERROR: oFF could not assign torsion for", qcmolid, target.payload)
                     print(e)
                     break
                 except Exception as e:
-                    print("ERROR: oFF exception:")
+                    print("ERROR: oFF exception for", qcmolid, target.payload)
                     print(e)
                     break
 
 
-                constraints = [c.payload for c in self.source.node_iter_to_root( mol_node, select="Constraint")]
+                constraints = [eval(c.payload) for c in self.source.node_iter_to_root( mol_node, select="Constraint")]
                 print("    ", mol_node, constraints, total_ene)
                 self.db.__setitem__( mol_node.payload, { "data": { "energy": total_ene }})
 
             if fail:
                 qca.qcmol_to_xyz( qcmol, 
-                    fnm="mol."+qcmolid+".labelfail.xyz",
-                    comment=qcmolid + " label fail")
+                    fnm="mol."+qcmolid+"."+target.payload+".labelfail.xyz",
+                    comment=qcmolid + " label fail " + target.payload)
                 continue
                 
 
