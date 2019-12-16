@@ -1,5 +1,6 @@
 
 import os
+import pdb
 import treedi
 import treedi.tree
 import simtk.unit
@@ -102,6 +103,9 @@ class OpenForceFieldTree( treedi.tree.PartitionTree):
 #            Chem.rdmolops.AssignStereochemistry( mol, cleanIt=True, force=True, flagPossibleStereoCenters=False)
             ids = AllChem.EmbedMultipleConfs( mol, numConfs=1)
 #            ids = AllChem.EmbedMultipleConfs( mol, numConfs=1, params=AllChem.ETKDG())
+            if len(ids) == 0:
+                print("ERROR: Could not create conformations")
+                continue
             conf = mol.GetConformer(ids[0])
             xyz = qcmol.get( "geometry")
             sym = qcmol.get( "symbols")
@@ -143,6 +147,7 @@ class OpenForceFieldTree( treedi.tree.PartitionTree):
             except AssertionError as e:
                 print("FAILED TO BUILD OFF MOL:")
                 print(e)
+                pdb.set_trace()
                 continue
             labels = self.forcefield.label_molecules( top)[0]
             #labels = labels[0]

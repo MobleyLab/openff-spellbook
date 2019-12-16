@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 import os
+import pdb
 import treedi
 import treedi.tree
 import simtk.unit
 from simtk import openmm
 import openforcefield as oFF
+from openforcefield.typing.engines.smirnoff.parameters import \
+    UnassignedProperTorsionParameterException
 from openforcefield.topology import Molecule
 from openforcefield.topology import Topology
 from openforcefield.typing.engines.smirnoff import ForceField
@@ -13,6 +16,7 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 from rdkit.Chem import FragmentMatcher
 from ..tools import const
+from .. import qcarchive as qca
 import copy
 import numpy as np
 
@@ -70,15 +74,14 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
 
         for n, target in enumerate(targets, 1):
             print( n,"/",n_targets, target)
-            #if n == 2:
-            #    break
+            #if n < 192:
+            #    continue
             attrs = self.source.db.get( target.payload).get( 'entry').dict().get( 'attributes')
             qcmolid = self.source.db.get( target.payload).get( 'data').get( 'initial_molecule')
 
             if isinstance( qcmolid, list):
                 qcmolid = qcmolid[0]
             qcmolid = 'QCM-' + str( qcmolid)
-            print(qcmolid)
             qcmol = self.source.db.get( qcmolid).get( "data")
             smiles_pattern = attrs.get( 'canonical_isomeric_explicit_hydrogen_mapped_smiles')
             mol = Chem.MolFromSmiles( smiles_pattern, sanitize=False)
@@ -88,21 +91,35 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
 
             map_idx = { a.GetIdx() : a.GetAtomMapNum() for a in mol.GetAtoms()}
             ids = AllChem.EmbedMultipleConfs( mol, numConfs=1)
-            conf = mol.GetConformer(ids[0])
+            try:
+                conf = mol.GetConformer(ids[0])
+            except IndexError:
+                print("ERROR: Could not generate a conformation in RDKit.", qcmolid)
+                qca.qcmol_to_xyz( qcmol, 
+                    fnm="mol."+qcmolid+".rdconfgenfail.xyz", comment=qcmolid + " rdconfgen fail")
+                continue
+
+            
 
             use_min_mol_for_charge = True
             if use_min_mol_for_charge:
                 minidx = None
                 minene = None
                 minmol = None
-                for opt in self.source.node_iter_depth_first( target, select="Optimization"):
-                    ene = self.source.db.get( opt.payload).get( "data").get( "energies")[ -1]
-                    if minene is None:
-                        minene = ene
-                        minidx = opt.children[-1]
-                    elif ene < minene:
-                        minene = ene
-                        minidx = opt.children[-1]
+                try:
+                    for opt in self.source.node_iter_depth_first( target, select="Optimization"):
+                        ene = self.source.db.get( opt.payload).get( "data").get( "energies")[ -1]
+                        if minene is None:
+                            minene = ene
+                            minidx = opt.children[-1]
+                        elif ene < minene:
+                            minene = ene
+                            minidx = opt.children[-1]
+                except TypeError:
+                    print("ERROR: No energies.", qcmolid) # ene is not a list above
+                    qca.qcmol_to_xyz( qcmol, 
+                        fnm="mol."+qcmolid+".noenefail.xyz", comment=qcmolid + " noene fail")
+                    continue
                 
 
                 if minidx == None:
@@ -123,19 +140,53 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
             Chem.rdmolops.AssignAtomChiralTagsFromStructure( mol, ids[0], replaceExistingTags=True)
 
             mmol = oFF.topology.Molecule.from_rdkit( mol, allow_undefined_stereo=True)
-            top = oFF.topology.Topology().from_molecules( mmol)
-            mmol.compute_partial_charges_am1bcc()
+            try:
+                top = oFF.topology.Topology().from_molecules( mmol)
+            except AssertionError:
+                print("ERROR: Could not setup molecule in oFF.", qcmolid)
+                qca.qcmol_to_xyz( qcmol, 
+                    fnm="mol."+qcmolid+".offmolfail.xyz", comment=qcmolid + " oFF fail")
+                #pdb.set_trace()
+                continue
+            try:
+                mmol.compute_partial_charges_am1bcc()
+            except Exception:
+                print("ERROR: Could not compute partial charge.", qcmolid)
+                qca.qcmol_to_xyz( qcmol, 
+                    fnm="mol."+qcmolid+".chrgfail.xyz", comment=qcmolid + " charge fail")
+                #pdb.set_trace()
+                continue
             gen_MM_charge = [mmol.partial_charges]
             
+            fail = True
             for mol_node in self.source.node_iter_depth_first( target, select="Molecule"):
+                fail = True
                 qcmol = self.source.db[ mol_node.payload][ 'data']
                 xyz = qcmol[ 'geometry']
                 xyz = xyz * const.bohr2angstrom
                 xyz = unmap( xyz, map_idx)
-                total_ene = self.calc_mm_energy( top, xyz, charge=gen_MM_charge)
+                try:
+                    total_ene = self.calc_mm_energy( top, xyz, charge=gen_MM_charge)
+                    fail = False
+                except UnassignedProperTorsionParameterException as e:
+                    print("ERROR: oFF could not assign torsion:")
+                    print(e)
+                    break
+                except Exception as e:
+                    print("ERROR: oFF exception:")
+                    print(e)
+                    break
+
+
                 constraints = [c.payload for c in self.source.node_iter_to_root( mol_node, select="Constraint")]
                 print("    ", mol_node, constraints, total_ene)
                 self.db.__setitem__( mol_node.payload, { "data": { "energy": total_ene }})
+
+            if fail:
+                qca.qcmol_to_xyz( qcmol, 
+                    fnm="mol."+qcmolid+".labelfail.xyz",
+                    comment=qcmolid + " label fail")
+                continue
                 
 
     def mm_potential(self, forcefield, top, xyz, charge=False):
