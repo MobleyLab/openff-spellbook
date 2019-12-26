@@ -334,7 +334,7 @@ class QCATree( Tree.Tree):
             chunks.append((i*max_query, j))
 
         objs = []
-        out_str = "Chunk "
+        out_str = "\rChunk "
         if projection is not None:
             out_str += "with projection "
         from datetime import datetime, timedelta
@@ -348,7 +348,7 @@ class QCATree( Tree.Tree):
         for i,j in chunks:
             #if i == 0:
             if True:
-                print( "{:20s} {:4d} {:4d} ".format(out_str, i, j), end="")
+                print( "{:20s} {:4d} {:4d}     ".format(out_str, i, j), end="")
             elapsed = datetime.now()
             objs += [dict(obj) for obj in \
                 fn( molecule=ids[i:j], driver="hessian", \
@@ -381,7 +381,7 @@ class QCATree( Tree.Tree):
             chunks.append( (i*max_query, j))
 
         objs = []
-        out_str = "Chunk "
+        out_str = "\rChunk "
         if projection is not None:
             out_str += "with projection "
         from datetime import datetime, timedelta
@@ -391,7 +391,7 @@ class QCATree( Tree.Tree):
         for i,j in chunks:
             #if i == 0:
             if True:
-                print( "{:20s} {:4d} {:4d} ".format(out_str, i, j), end="")
+                print( "{:20s} {:4d} {:4d}     ".format(out_str, i, j), end="")
             elapsed = datetime.now()
             if procedure is None:
                 if projection is None:
