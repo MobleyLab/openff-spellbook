@@ -2,7 +2,7 @@
 import itertools
 
 def flatten_list(l, times=1):
-    print("FLATTEN: list is", len(l))
+    #print("FLATTEN: list is", len(l))
     if times == 0: return l
     if times == -1:
         if isinstance( l[0], list):
