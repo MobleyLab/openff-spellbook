@@ -17,6 +17,7 @@ from rdkit.Chem import AllChem
 from rdkit.Chem import FragmentMatcher
 from rdkit import Geometry as RDGeom
 from ..tools import const
+from .. import rdutil 
 from .. import qcarchive as qca
 import copy
 import numpy as np
@@ -85,15 +86,10 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
             qcmolid = 'QCM-' + str( qcmolid)
             qcmol = self.source.db.get( qcmolid).get( "data")
             smiles_pattern = attrs.get( 'canonical_isomeric_explicit_hydrogen_mapped_smiles')
-            mol = Chem.MolFromSmiles( smiles_pattern, sanitize=False)
-            Chem.SanitizeMol( mol, Chem.SanitizeFlags.SANITIZE_ALL ^ \
-                    Chem.SanitizeFlags.SANITIZE_ADJUSTHS ^ \
-                    Chem.SanitizeFlags.SANITIZE_SETAROMATICITY)
-            Chem.SetAromaticity( mol, Chem.AromaticityModel.AROMATICITY_MDL)
-            Chem.SanitizeMol( mol, Chem.SanitizeFlags.SANITIZE_SETAROMATICITY)
 
-            map_idx = { a.GetIdx() : a.GetAtomMapNum() for a in mol.GetAtoms()}
-            ret = AllChem.EmbedMolecule( mol, coordMap={i : RDGeom.Point3D(*qcmol.get("geometry")[ map_idx[ i]-1] * const.bohr2angstrom) for i in map_idx}  )
+            mol = rdutil.mol.build_from_smiles( smiles_pattern)
+            map_idx  = rdutil.mol.atom_map( mol)
+            ret = rdutil.mol.embed_qcmol_3d( mol, qcmol)
             if ret < 0:
                 print("ERROR: Could not generate a conformation in RDKit.", qcmolid, target.payload)
                 qca.qcmol_to_xyz( qcmol, 
@@ -172,7 +168,19 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
             gen_MM_charge = [mmol.partial_charges]
             
             fail = True
-            for mol_node in self.source.node_iter_depth_first( target, select="Molecule"):
+            #breakpoint()
+            nodes = list(self.source.node_iter_depth_first( 
+                target, select="Molecule"))
+            order = np.arange( len( nodes))
+            vals = []
+            for mol_node in nodes:
+                vals.append( tuple([ c.payload[2] for c in \
+                    self.source.node_iter_to_root( mol_node, 
+                        select="Constraint")]))
+            vals = np.array( vals)
+            order = np.lexsort( vals.T)
+            nodes_in_order = [nodes[i] for i in order]
+            for mol_node in nodes_in_order:
                 fail = True
                 qcmol = self.source.db[ mol_node.payload][ 'data']
                 xyz = qcmol[ 'geometry']
@@ -191,7 +199,7 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
                     break
 
 
-                constraints = [eval(c.payload) for c in self.source.node_iter_to_root( mol_node, select="Constraint")]
+                constraints = [c.payload for c in self.source.node_iter_to_root( mol_node, select="Constraint")]
                 print("    ", mol_node, constraints, total_ene)
                 self.db.__setitem__( mol_node.payload, { "data": { "energy": total_ene }})
 

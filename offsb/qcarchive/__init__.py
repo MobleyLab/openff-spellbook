@@ -4,10 +4,17 @@ del get_versions
 
 from ..tools import const
 
-def qcmol_to_xyz( qcmol, fnm=None, fd=None, comment=""):
+def qcmol_to_xyz( qcmol, atom_map=None, fnm=None, fd=None, comment=""):
     syms = qcmol["symbols"]
     xyz  = qcmol["geometry"]
+    
+    if atom_map:
+        idx = sorted( list(atom_map.keys()))
+        syms = [ syms[ atom_map[ i]-1] for i in idx]
+        xyz  = [  xyz[ atom_map[ i]-1] for i in idx]
+
     xyzformat = "{:4s} {:10.6f} {:10.6f} {:10.6}\n"
+
     header = [ str(len(syms)) + "\n", str(comment) + "\n"]
     xyzstr = []
     for s,x in zip( syms, xyz):

@@ -19,6 +19,7 @@ setup(
               'offsb/tools',
               'offsb/search',
               'offsb/qcarchive',
+              'offsb/rdutil',
               'treedi'],
     
     install_requires=requirements,

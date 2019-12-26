@@ -473,7 +473,7 @@ class QCATree( Tree.Tree):
         #print( "*********************************")
         self.branch_torsiondrive_record( [ n.index for n in td_nodes], skel=skel)
 
-    def branch_ds( self, nid, name, fn, skel=False):
+    def branch_ds( self, nid, name, fn, skel=False, start=0, limit=0):
         """ Generate the individual entries from a dataset """
         if name in self.drop:
             return
@@ -481,6 +481,8 @@ class QCATree( Tree.Tree):
         node = self.node_index.get( nid)
         ds = self.db.get( node.payload).get( "data")
         records = ds.data.records
+        if limit > 0 and limit < len(records):
+            records = dict(list(records.items())[start:start+limit])
 
 
         #[entry.object_map.get("default") for entry in records.values()]
@@ -496,6 +498,7 @@ class QCATree( Tree.Tree):
             for entry in records.values():
                 if suf + str(entry.object_map.get("default")) == index:
                     entry_match = entry
+                    break
             if entry_match is None:
                 raise IndexError("Could not match Entry to Record")
             pl = { "entry": entry_match, "data": obj}
@@ -566,12 +569,32 @@ class QCATree( Tree.Tree):
             return
         opt_nodes = []
 
+        #breakpoint()
         for node in nodes:
+
             obj = self.db.get( node.payload)
-            for constraint, opts in obj.get( "data").get( "grid_optimizations").items():
+            #status = obj.get( "data").get( "status")[:]
+            scans = obj.get( "data").get( "keywords").__dict__.get( "scans")
+            assert len(scans) == 1
+            scan = scans[0].__dict__
+            for  constraint, opts in obj.get( "data").get( "grid_optimizations").items():
                 #TODO need to cross ref the index to the actual constraint val
-                constraint_node = Node.Node( payload=constraint , name="Constraint")
+                
+                #cidx = 'CSR-' + node.payload.split("-")[1]
+                val = eval(constraint)
+
+                # handle when index is "preoptimization" rather than e.g. [0]
+                if isinstance( val, str):
+                    continue
+                else:
+                    step = scan.get( "steps")[val[0]]
+                pl = (scan.get( "type")[:], 
+                        tuple(scan.get( "indices")), 
+                        step)
+                constraint_node = Node.Node( payload=pl , name="Constraint")
                 self.add( node.index, constraint_node)
+                #self.db.__setitem__( cidx, { "data": scan })
+                
                 
                 #for index in opts:
                 #    index = 'QCP-' + index
@@ -590,6 +613,24 @@ class QCATree( Tree.Tree):
         #    for j,m in enumerate(opt_nodes[i+1:],i+1):
         #        assert idx != m.index
         self.branch_optimization_record( [x.index for x in opt_nodes], skel=skel)
+
+        #breakpoint()
+        #for topnode in nodes:
+        #    allsuccess = True
+        #    for opt_nidx in topnode.children:
+        #        opt_node = self.node_index.get( opt_nidx)
+        #        obj = self.db.get( opt_node.payload)
+        #        status = obj.get( "data").get( "status")[:]
+        #        if status == "COMPLETE":
+        #            opt_node.state = Node.CLEAN
+        #            for node in node_iter_depth_first( opt_node):
+        #                if "Stub" in node.name:
+        #                    node.state = Node.NEW
+        #                if "Grad" in node.name or "Mol" in node.name:
+        #                    node.state = Node.CLEAN
+        #        else:
+        #            opt_node.state = Node.DIRTY
+        #            tdnode.state = Node.DIRTY
         
         #for group in opt_ids:
          #   for opt in group:
@@ -643,8 +684,24 @@ class QCATree( Tree.Tree):
         #        assert idx != m.index
         self.branch_optimization_record( [x.index for x in opt_nodes], skel=skel)
         
-        #for group in opt_ids:
-         #   for opt in group:
+        #check to make sure they all were successful
+        #breakpoint()
+        #for tdnode in nodes:
+        #    allsuccess = True
+        #    for opt_node in opt_nodes:
+        #        obj = self.db.get( opt_node.payload)
+        #        status = obj.get( "data").get( "status")[:]
+        #        if status == "COMPLETE":
+        #            opt_node.state = Node.CLEAN
+        #            for node in node_iter_depth_first( opt_node):
+        #                if "Stub" in node.name:
+        #                    node.state = Node.NEW
+        #                if "Grad" in node.name or "Mol" in node.name:
+        #                    node.state = Node.CLEAN
+        #        else:
+        #            opt_node.state = Node.DIRTY
+        #            tdnode.state = Node.DIRTY
+
 
 
     def branch_optimization_record( self, nids, skel=False):
@@ -676,15 +733,23 @@ class QCATree( Tree.Tree):
             print("Downloading gradient information for", len( flat_result_ids))
             result_map = self.batch_download( flat_result_ids, client.query_results)
 
+        #breakpoint()
         for node in nodes:
             #node = self.node_index.get( node.index)
             obj = self.db.get( node.payload)
             traj = obj.get( "data").get( "trajectory")
+            status = obj.get( "data").get( "status")[:]
+            if status == "COMPLETE":
+                node.state = Node.CLEAN
+            else:
+                print("QCA: This optimization failed ("+node.payload+")")
+                continue
             if traj is not None and len(traj) > 0: 
                 for index in traj:
                     index = suf + index
                     name = "GradientStub" if skel else "Gradient"
                     result_node = Node.Node( name="GradientStub", payload=index)
+                    resutl_node = Node.CLEAN
                     result_nodes.append( result_node)
                     self.add( node.index, result_node)
                     pl = {} if skel else result_map.get( index)
@@ -740,8 +805,10 @@ class QCATree( Tree.Tree):
                 assert False
             else:
                 name = "MoleculeStub" if skel else "Molecule"
+                state = "NEW" if skel else "CLEAN"
                 index = suf + self.db.get( node.payload).get( "data").get( 'molecule')
                 mol_node = Node.Node( name=name, payload=index)
+                mol_node.state = state
                 self.add( node.index, mol_node)
                 mol_nodes.append( mol_node)
 
@@ -773,7 +840,8 @@ class QCATree( Tree.Tree):
                 payload = mol.payload
                 for hess in hess_objs:
                     if payload == ("QCM-" + hess_objs.get( hess).get( "molecule")):
-                        hess_node = Node.Node( name="HessianStub", payload=hess)
+                        hess_node = Node.Node( name="Hessian", payload=hess)
+                        hess_node.state = Node.CLEAN
                         self.add( mol.index, hess_node)
                         pl = hess_objs.get( hess)
                         self.db.__setitem__( hess, { "data" : pl } )
