@@ -21,6 +21,10 @@ from .. import rdutil
 from .. import qcarchive as qca
 import copy
 import numpy as np
+from multiprocessing import Pool
+import threading
+
+
 
 class OpenMMEnergy( treedi.tree.PartitionTree):
     """ Creates an openMM system of each entry 
@@ -35,15 +39,25 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
         logger.setLevel(level=logging.ERROR)
         from pkg_resources import iter_entry_points
         self.filename = filename
-        for entry_point in iter_entry_points(group='openforcefield.smirnoff_forcefield_directory'):
-            pth = entry_point.load()()[0]
-            abspth = os.path.join(pth, filename)
-            print("Searching", abspth)
-            if os.path.exists( abspth):
-                self.abs_path = abspth
-                print("Found")
-                break
-            raise Exception("Forcefield could not be found")
+
+        search_pth = list(iter_entry_points(group='openforcefield.smirnoff_forcefield_directory'))
+        abspth = os.path.join(".", filename)
+        print("Searching", ".")
+        found = False
+        if os.path.exists( abspth):
+            self.abs_path = abspth
+            print("Found")
+            found = True
+        if not found:
+            for entry_point in search_pth:
+                pth = entry_point.load()()[0]
+                abspth = os.path.join(pth, filename)
+                print("Searching", abspth)
+                if os.path.exists( abspth):
+                    self.abs_path = abspth
+                    print("Found")
+                    break
+                raise Exception("Forcefield could not be found")
         self.forcefield= oFF.typing.engines.smirnoff.ForceField( self.abs_path, disable_version_check=True)
         logger.setLevel(level=level)
         print("My db is", self.db)
@@ -59,7 +73,147 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
     def associate( self, source):
         super().associate( source)
 
-    def apply( self, targets=None):
+    def apply_single( self, i, target):
+
+        def unmap( xyz, map_idx):
+            inv = [ ( map_idx[ i] - 1) for i in range(len(xyz))]
+            return xyz[ inv]
+
+        ret_str = []
+        #if n < 192:
+        #    continue
+        attrs = self.source.db.get( target.payload).get( 'entry').dict().get( 'attributes')
+        qcmolid = self.source.db.get( target.payload).get( 'data').get( 'initial_molecule')
+
+        if isinstance( qcmolid, list):
+            qcmolid = qcmolid[0]
+        qcmolid = 'QCM-' + str( qcmolid)
+        qcmol = self.source.db.get( qcmolid).get( "data")
+        smiles_pattern = attrs.get( 'canonical_isomeric_explicit_hydrogen_mapped_smiles')
+
+        mol = rdutil.mol.build_from_smiles( smiles_pattern)
+        map_idx  = rdutil.mol.atom_map( mol)
+        ret = rdutil.mol.embed_qcmol_3d( mol, qcmol)
+        if ret < 0:
+            ret_str.append("ERROR: Could not generate a conformation in RDKit. {} {}\n".format(qcmolid, target.payload))
+            qca.qcmol_to_xyz( qcmol, 
+                fnm="mol."+qcmolid+"."+target.payload+".rdconfgenfail.xyz", comment=qcmolid + " rdconfgen fail " + target.payload)
+            return { target: ret_str }
+        conf = mol.GetConformer()
+        #ids = AllChem.EmbedMultipleConfs( mol, numConfs=1)
+        #try:
+        #    conf = mol.GetConformer(ids[0])
+        #except IndexError:
+        #    print("ERROR: Could not generate a conformation in RDKit.", qcmolid, target.payload)
+        #    qca.qcmol_to_xyz( qcmol, 
+        #        fnm="mol."+qcmolid+"."+target.payload+".rdconfgenfail.xyz", comment=qcmolid + " rdconfgen fail " + target.payload)
+        #    continue
+        #conf = mol.GetConformer(ids[0])
+
+        
+
+        use_min_mol_for_charge = True
+        if use_min_mol_for_charge:
+            minidx = None
+            minene = None
+            minmol = None
+            try:
+                for opt in self.source.node_iter_depth_first( target, select="Optimization"):
+                    ene = self.source.db.get( opt.payload).get( "data").get( "energies")[ -1]
+                    if minene is None:
+                        minene = ene
+                        minidx = opt.children[-1]
+                    elif ene < minene:
+                        minene = ene
+                        minidx = opt.children[-1]
+            except TypeError:
+                # ene is not a list above
+                ret_str.append("ERROR: No energies. {} {}\n".format( qcmolid, target.payload))
+                qca.qcmol_to_xyz( qcmol, 
+                    fnm="mol."+qcmolid+"."+target.payload+".noenefail.xyz", comment=qcmolid + " noene fail " + target.payload)
+                return { target: ret_str }
+            
+
+            if minidx == None:
+                ret_str.append("EMPTY. SKIPPING\n")
+                return { target: ret_str }
+            grad_node = self.source.node_index[ minidx]
+            mol_node  = self.source.node_index[ grad_node.children[0]]
+            qcmol = self.source.db[ mol_node.payload][ 'data']
+
+            ret_str.append("min mol is {} ene is {} au\n".format(mol_node, minene))
+
+        xyz = qcmol.get( "geometry")
+        sym = qcmol.get( "symbols")
+        #for i, a in enumerate(mol.GetAtoms()):
+        #    conf.SetAtomPosition(i, xyz[ map_idx[ i] - 1] * const.bohr2angstrom)
+
+        #Chem.rdmolops.AssignStereochemistryFrom3D( mol, ids[0], replaceExistingTags=True)
+        #Chem.rdmolops.AssignStereochemistryFrom3D( mol, ids[0], replaceExistingTags=True)
+        Chem.rdmolops.AssignAtomChiralTagsFromStructure( mol, -1, replaceExistingTags=True)
+
+        mmol = oFF.topology.Molecule.from_rdkit( mol, allow_undefined_stereo=True)
+        try:
+            top = oFF.topology.Topology().from_molecules( mmol)
+        except AssertionError:
+            ret_str.append("ERROR: Could not setup molecule in oFF. {} {}\n".format( qcmolid, target.payload))
+            qca.qcmol_to_xyz( qcmol, 
+                fnm="mol."+qcmolid+"."+target.payload+".offmolfail.xyz", comment=qcmolid + " oFF fail " + target.payload)
+            #pdb.set_trace()
+            return { target: ret_str }
+        try:
+            mmol.compute_partial_charges_am1bcc()
+        except Exception:
+            ret_str.append("ERROR: Could not compute partial charge. {} {}\n".format( qcmolid, target.payload))
+            qca.qcmol_to_xyz( qcmol, 
+                fnm="mol."+qcmolid+"."+target.payload+".chrgfail.xyz", comment=qcmolid + " charge fail "+target.payload)
+            #pdb.set_trace()
+            return { target: ret_str }
+        gen_MM_charge = [mmol.partial_charges]
+        
+        fail = True
+        #breakpoint()
+        nodes = list(self.source.node_iter_depth_first( 
+            target, select="Molecule"))
+        order = np.arange( len( nodes))
+        vals = []
+        for mol_node in nodes:
+            vals.append( tuple([ c.payload[2] for c in \
+                self.source.node_iter_to_root( mol_node, 
+                    select="Constraint")]))
+        vals = np.array( vals)
+        order = np.lexsort( vals.T)
+        nodes_in_order = [nodes[i] for i in order]
+        for mol_node in nodes_in_order:
+            fail = True
+            qcmol = self.source.db[ mol_node.payload][ 'data']
+            xyz = qcmol[ 'geometry']
+            xyz = xyz * const.bohr2angstrom
+            xyz = unmap( xyz, map_idx)
+            try:
+                total_ene = self.calc_mm_energy( top, xyz, charge=gen_MM_charge)
+                fail = False
+            except UnassignedProperTorsionParameterException as e:
+                ret_str.append("ERROR: oFF could not assign torsion for {} {}\n".format( qcmolid, target.payload))
+                ret_str.append( str(e) + '\n')
+                break
+            except Exception as e:
+                ret_str.append("ERROR: oFF exception for {} {}\n".format( qcmolid, target.payload))
+                ret_str.append( str(e) + '\n')
+                break
+
+
+            constraints = [c.payload for c in self.source.node_iter_to_root( mol_node, select="Constraint")]
+            ret_str.append("    {} {} {}\n".format( mol_node, constraints, total_ene))
+            self.db.__setitem__( mol_node.payload, { "data": { "energy": total_ene }})
+
+        if fail:
+            qca.qcmol_to_xyz( qcmol, 
+                fnm="mol."+qcmolid+"."+target.payload+".labelfail.xyz",
+                comment=qcmolid + " label fail " + target.payload)
+        return { target: ret_str }
+
+    def apply( self, targets=None, procs=1):
         if targets is None:
             targets = list(self.source.iter_entry())
         elif not hasattr( targets, "__iter__"):
@@ -70,144 +224,26 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
 
         n_targets = len(targets)
 
-        def unmap( xyz, map_idx):
-            inv = [ ( map_idx[ i] - 1) for i in range(len(xyz))]
-            return xyz[ inv]
+        
+        #exe = Pool(processes=procs) 
+        #work = [ exe.apply_async( OpenMMEnergy.apply_single, ( self, n, target) ) for n, target in enumerate(targets, 1) ]
+        #out = [result.get() for result in work]
+        #for i, val in enumerate( out):
+        #    for tgt, ret in val.items():
+        #        print( n,"/", n_targets, tgt)
+        #        print( ret)
 
-        for n, target in enumerate(targets, 1):
-            print( n,"/",n_targets, target)
-            #if n < 192:
-            #    continue
-            attrs = self.source.db.get( target.payload).get( 'entry').dict().get( 'attributes')
-            qcmolid = self.source.db.get( target.payload).get( 'data').get( 'initial_molecule')
-
-            if isinstance( qcmolid, list):
-                qcmolid = qcmolid[0]
-            qcmolid = 'QCM-' + str( qcmolid)
-            qcmol = self.source.db.get( qcmolid).get( "data")
-            smiles_pattern = attrs.get( 'canonical_isomeric_explicit_hydrogen_mapped_smiles')
-
-            mol = rdutil.mol.build_from_smiles( smiles_pattern)
-            map_idx  = rdutil.mol.atom_map( mol)
-            ret = rdutil.mol.embed_qcmol_3d( mol, qcmol)
-            if ret < 0:
-                print("ERROR: Could not generate a conformation in RDKit.", qcmolid, target.payload)
-                qca.qcmol_to_xyz( qcmol, 
-                    fnm="mol."+qcmolid+"."+target.payload+".rdconfgenfail.xyz", comment=qcmolid + " rdconfgen fail " + target.payload)
-                continue
-            conf = mol.GetConformer()
-            #ids = AllChem.EmbedMultipleConfs( mol, numConfs=1)
-            #try:
-            #    conf = mol.GetConformer(ids[0])
-            #except IndexError:
-            #    print("ERROR: Could not generate a conformation in RDKit.", qcmolid, target.payload)
-            #    qca.qcmol_to_xyz( qcmol, 
-            #        fnm="mol."+qcmolid+"."+target.payload+".rdconfgenfail.xyz", comment=qcmolid + " rdconfgen fail " + target.payload)
-            #    continue
-            #conf = mol.GetConformer(ids[0])
-
-            
-
-            use_min_mol_for_charge = True
-            if use_min_mol_for_charge:
-                minidx = None
-                minene = None
-                minmol = None
-                try:
-                    for opt in self.source.node_iter_depth_first( target, select="Optimization"):
-                        ene = self.source.db.get( opt.payload).get( "data").get( "energies")[ -1]
-                        if minene is None:
-                            minene = ene
-                            minidx = opt.children[-1]
-                        elif ene < minene:
-                            minene = ene
-                            minidx = opt.children[-1]
-                except TypeError:
-                    print("ERROR: No energies.", qcmolid, target.payload) # ene is not a list above
-                    qca.qcmol_to_xyz( qcmol, 
-                        fnm="mol."+qcmolid+"."+target.payload+".noenefail.xyz", comment=qcmolid + " noene fail " + target.payload)
-                    continue
-                
-
-                if minidx == None:
-                    print("EMPTY. SKIPPING")
-                    continue
-                grad_node = self.source.node_index[ minidx]
-                mol_node  = self.source.node_index[ grad_node.children[0]]
-                qcmol = self.source.db[ mol_node.payload][ 'data']
-
-                print("min mol is", mol_node, "ene is", minene, "au")
-
-            xyz = qcmol.get( "geometry")
-            sym = qcmol.get( "symbols")
-            #for i, a in enumerate(mol.GetAtoms()):
-            #    conf.SetAtomPosition(i, xyz[ map_idx[ i] - 1] * const.bohr2angstrom)
-
-            #Chem.rdmolops.AssignStereochemistryFrom3D( mol, ids[0], replaceExistingTags=True)
-            #Chem.rdmolops.AssignStereochemistryFrom3D( mol, ids[0], replaceExistingTags=True)
-            Chem.rdmolops.AssignAtomChiralTagsFromStructure( mol, -1, replaceExistingTags=True)
-            Chem.rdmolops.AssignAtomChiralTagsFromStructure( mol, -1, replaceExistingTags=True)
-
-            mmol = oFF.topology.Molecule.from_rdkit( mol, allow_undefined_stereo=True)
-            try:
-                top = oFF.topology.Topology().from_molecules( mmol)
-            except AssertionError:
-                print("ERROR: Could not setup molecule in oFF.", qcmolid, target.payload)
-                qca.qcmol_to_xyz( qcmol, 
-                    fnm="mol."+qcmolid+"."+target.payload+".offmolfail.xyz", comment=qcmolid + " oFF fail " + target.payload)
-                #pdb.set_trace()
-                continue
-            try:
-                mmol.compute_partial_charges_am1bcc()
-            except Exception:
-                print("ERROR: Could not compute partial charge.", qcmolid, target.payload)
-                qca.qcmol_to_xyz( qcmol, 
-                    fnm="mol."+qcmolid+"."+target.payload+".chrgfail.xyz", comment=qcmolid + " charge fail "+target.payload)
-                #pdb.set_trace()
-                continue
-            gen_MM_charge = [mmol.partial_charges]
-            
-            fail = True
-            #breakpoint()
-            nodes = list(self.source.node_iter_depth_first( 
-                target, select="Molecule"))
-            order = np.arange( len( nodes))
-            vals = []
-            for mol_node in nodes:
-                vals.append( tuple([ c.payload[2] for c in \
-                    self.source.node_iter_to_root( mol_node, 
-                        select="Constraint")]))
-            vals = np.array( vals)
-            order = np.lexsort( vals.T)
-            nodes_in_order = [nodes[i] for i in order]
-            for mol_node in nodes_in_order:
-                fail = True
-                qcmol = self.source.db[ mol_node.payload][ 'data']
-                xyz = qcmol[ 'geometry']
-                xyz = xyz * const.bohr2angstrom
-                xyz = unmap( xyz, map_idx)
-                try:
-                    total_ene = self.calc_mm_energy( top, xyz, charge=gen_MM_charge)
-                    fail = False
-                except UnassignedProperTorsionParameterException as e:
-                    print("ERROR: oFF could not assign torsion for", qcmolid, target.payload)
-                    print(e)
-                    break
-                except Exception as e:
-                    print("ERROR: oFF exception for", qcmolid, target.payload)
-                    print(e)
-                    break
+        #exe.close()
 
 
-                constraints = [c.payload for c in self.source.node_iter_to_root( mol_node, select="Constraint")]
-                print("    ", mol_node, constraints, total_ene)
-                self.db.__setitem__( mol_node.payload, { "data": { "energy": total_ene }})
+        for n, target in enumerate( targets, 1):
+            ret = self.apply_single( n, target)
+            for tgt, ret in ret.items():
+                print( n,"/", n_targets, tgt)
+                [ print( line, end="") for line in ret ]
 
-            if fail:
-                qca.qcmol_to_xyz( qcmol, 
-                    fnm="mol."+qcmolid+"."+target.payload+".labelfail.xyz",
-                    comment=qcmolid + " label fail " + target.payload)
-                continue
+        
+        import concurrent.futures
                 
 
     def mm_potential(self, forcefield, top, xyz, charge=False):

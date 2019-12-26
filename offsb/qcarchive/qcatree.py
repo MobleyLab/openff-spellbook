@@ -334,7 +334,7 @@ class QCATree( Tree.Tree):
             chunks.append((i*max_query, j))
 
         objs = []
-        out_str = "\rChunk "
+        out_str = "Chunk "
         if projection is not None:
             out_str += "with projection "
         from datetime import datetime, timedelta
@@ -348,7 +348,7 @@ class QCATree( Tree.Tree):
         for i,j in chunks:
             #if i == 0:
             if True:
-                print( "{:20s} {:4d} {:4d}     ".format(out_str, i, j), end="")
+                print( "\r{:20s} {:4d} {:4d}     ".format(out_str, i, j), end="")
             elapsed = datetime.now()
             objs += [dict(obj) for obj in \
                 fn( molecule=ids[i:j], driver="hessian", \
@@ -357,9 +357,9 @@ class QCATree( Tree.Tree):
             elapsed = str(datetime.now() - elapsed)
             #if i == 0:
             if True:
-                print( "... Received {:6d}  | elapsed: {:s}\n".format( \
+                print( "... Received {:6d}  | elapsed: {:s}".format( \
                     len(objs), elapsed), end="")
-        print("TotalTime: {:s}\n".format( str( datetime.now() - total)), end="")
+        print("\nTotalTime: {:s}\n".format( str( datetime.now() - total)), end="")
         obj_map = {id_suf + str(obj.get('id')): obj for obj in objs}
         return obj_map
 
@@ -381,7 +381,7 @@ class QCATree( Tree.Tree):
             chunks.append( (i*max_query, j))
 
         objs = []
-        out_str = "\rChunk "
+        out_str = "Chunk "
         if projection is not None:
             out_str += "with projection "
         from datetime import datetime, timedelta
@@ -391,7 +391,7 @@ class QCATree( Tree.Tree):
         for i,j in chunks:
             #if i == 0:
             if True:
-                print( "{:20s} {:4d} {:4d}     ".format(out_str, i, j), end="")
+                print( "\r{:20s} {:4d} {:4d}     ".format(out_str, i, j), end="")
             elapsed = datetime.now()
             if procedure is None:
                 if projection is None:
@@ -410,68 +410,68 @@ class QCATree( Tree.Tree):
             elapsed = str(datetime.now() - elapsed)
             #if i == 0:
             if True:
-                print( "... Received {:6d}  | elapsed: {:s}\n".format( \
+                print( "... Received {:6d}  | elapsed: {:s}".format( \
                     len(objs), elapsed), end="")
-        print("TotalTime: {:s}\n".format( str( datetime.now() - total)), end="")
+        print("\nTotalTime: {:s}\n".format( str( datetime.now() - total)), end="")
         obj_map = {id_suf + str(obj.get('id')): obj for obj in objs}
         return obj_map
 
-    def branch_torsiondrive_ds( self, nid, skel=False):
-        """ Generate the individual torsion drives """
-        if "TorsionDrive" in self.drop:
-            return
-        suf = "QCP-"
-        node = self.node_index.get( nid)
-        ds = self.db.get( node.payload).get( "data")
-        records = ds.data.records
-
-        #[entry.object_map.get("default") for entry in records.values()]
-        td_ids = [suf + str(entry.object_map.get("default")) for entry in records.values()]
-        #td_ids = td_ids[:1]
-        client = self.db.get( "ROOT").get( "data") 
-        print("Downloading TorsionDrive information for", len( flatten_list( td_ids, times=-1)))
-        td_map = self.batch_download( td_ids, client.query_procedures) 
-
-
-        td_nodes = []
-        for index, obj in td_map.items():
-            entry_match = None
-            for entry in records.values():
-                if suf + str(entry.object_map.get("default")) == index:
-                    entry_match = entry
-            if entry_match is None:
-                raise IndexError("Could not match TDEntry to a TDRecord")
-
-            #td_nodes.append( Node(index="".join([ suf, index]), name="TorsionDrive", payload={"meta": entry_match, "record": obj}))
-            pl = { "entry": entry_match, "data": obj}
-            self.db.__setitem__( index, pl)
-            td_nodes.append( \
-                Node.Node( name="TorsionDrive", payload=index))
-        [ self.add( node.index, v) for v in td_nodes]
-
-        init_mol_ids = ['QCM-' + str(td.get( "initial_molecule")[0]) for \
-            td in td_map.values()]
-        print("Downloading TorsionDrive initial molecules for  for", \
-            len( init_mol_ids))
-        init_mol_map = self.batch_download( init_mol_ids, client.query_molecules)
-            
-        #[ td_node.payload.__setitem__("initial_molecule", \
-        #    init_mol_map.get( 'QCM-' + str(td_node.payload.get( "record").get( "initial_molecule")[0])))\
-        #    for td_node in td_nodes] 
-
-        for td_node in td_nodes:
-            qcid = self.db.get( td_node.payload)
-            molid = 'QCM-' + str(qcid.get( "data").get( "initial_molecule")[0])
-            mol_obj = init_mol_map.get( molid)
-            self.db.__setitem__( molid , { "data": mol_obj})
-            #print( "ADDED INIT MOL", molid, self.db.get( molid) )
-
-        #print( "*********************************")
-        #[print( x ) for x in self.db.values()]
-        #print( "*********************************")
-        #print( self.node_index)
-        #print( "*********************************")
-        self.branch_torsiondrive_record( [ n.index for n in td_nodes], skel=skel)
+#    def branch_torsiondrive_ds( self, nid, skel=False):
+#        """ Generate the individual torsion drives """
+#        if "TorsionDrive" in self.drop:
+#            return
+#        suf = "QCP-"
+#        node = self.node_index.get( nid)
+#        ds = self.db.get( node.payload).get( "data")
+#        records = ds.data.records
+#
+#        #[entry.object_map.get("default") for entry in records.values()]
+#        td_ids = [suf + str(entry.object_map.get("default")) for entry in records.values()]
+#        #td_ids = td_ids[:1]
+#        client = self.db.get( "ROOT").get( "data") 
+#        print("Downloading TorsionDrive information for", len( flatten_list( td_ids, times=-1)))
+#        td_map = self.batch_download( td_ids, client.query_procedures) 
+#
+#
+#        td_nodes = []
+#        for index, obj in td_map.items():
+#            entry_match = None
+#            for entry in records.values():
+#                if suf + str(entry.object_map.get("default")) == index:
+#                    entry_match = entry
+#            if entry_match is None:
+#                raise IndexError("Could not match TDEntry to a TDRecord")
+#
+#            #td_nodes.append( Node(index="".join([ suf, index]), name="TorsionDrive", payload={"meta": entry_match, "record": obj}))
+#            pl = { "entry": entry_match, "data": obj}
+#            self.db.__setitem__( index, pl)
+#            td_nodes.append( \
+#                Node.Node( name="TorsionDrive", payload=index))
+#        [ self.add( node.index, v) for v in td_nodes]
+#
+#        init_mol_ids = ['QCM-' + str(td.get( "initial_molecule")[0]) for \
+#            td in td_map.values()]
+#        print("Downloading TorsionDrive initial molecules for  for", \
+#            len( init_mol_ids))
+#        init_mol_map = self.batch_download( init_mol_ids, client.query_molecules)
+#            
+#        #[ td_node.payload.__setitem__("initial_molecule", \
+#        #    init_mol_map.get( 'QCM-' + str(td_node.payload.get( "record").get( "initial_molecule")[0])))\
+#        #    for td_node in td_nodes] 
+#
+#        for td_node in td_nodes:
+#            qcid = self.db.get( td_node.payload)
+#            molid = 'QCM-' + str(qcid.get( "data").get( "initial_molecule")[0])
+#            mol_obj = init_mol_map.get( molid)
+#            self.db.__setitem__( molid , { "data": mol_obj})
+#            #print( "ADDED INIT MOL", molid, self.db.get( molid) )
+#
+#        #print( "*********************************")
+#        #[print( x ) for x in self.db.values()]
+#        #print( "*********************************")
+#        #print( self.node_index)
+#        #print( "*********************************")
+#        self.branch_torsiondrive_record( [ n.index for n in td_nodes], skel=skel)
 
     def branch_ds( self, nid, name, fn, skel=False, start=0, limit=0):
         """ Generate the individual entries from a dataset """
@@ -511,7 +511,7 @@ class QCATree( Tree.Tree):
         init_mols_are_lists = False
         if isinstance( init_mol_ids[0], list):
             init_mols_are_lists = True
-            init_mol_ids = [ str(x)[0] for x in init_mol_ids]
+            init_mol_ids = [ str(x[0]) for x in init_mol_ids]
         init_mol_ids = ["QCM-" + x for x in init_mol_ids]
 
         #print( init_mol_ids)
@@ -532,6 +532,10 @@ class QCATree( Tree.Tree):
             self.db.__setitem__( molid , { "data": mol_obj})
 
         fn( [node.index for node in nodes], skel=skel)
+
+    def branch_torsiondrive_ds( self, node, skel=False):
+        """ Generate the individual torsiondrives """
+        self.branch_ds( node, "TorsionDrive", self.branch_torsiondrive_record, skel=skel)
 
     def branch_optimization_ds( self, node, skel=False):
         """ Generate the individual optimizations """
@@ -666,10 +670,23 @@ class QCATree( Tree.Tree):
 
         # have the opt map, which is the optimizations with their ids
         # nodes are the torsiondrives
+        #breakpoint()
         for node in nodes:
             obj = self.db.get( node.payload)
+            indices = obj.get( "entry").td_keywords.dihedrals[0]
             for constraint, opts in obj.get( "data").get( "optimization_history").items():
-                constraint_node = Node.Node( payload=constraint , name="Constraint")
+                #val = eval(constraint)
+
+                ## handle when index is "preoptimization" rather than e.g. [0]
+                #if isinstance( val, str):
+                #    continue
+                #else:
+                #    step = scan.get( "steps")[val[0]]
+
+                pl = ( "dihedral", 
+                        indices, 
+                        eval( constraint)[0])
+                constraint_node = Node.Node( payload=pl , name="Constraint")
                 self.add( node.index, constraint_node)
                 
                 for index in opts:
@@ -875,7 +892,12 @@ class QCATree( Tree.Tree):
         for top_node in nodes:
             for opt_node in fn( self, top_node, select="Optimization"):
                 if len( opt_node.children) > 0:
-                    yield self.node_index.get( self.node_index.get( opt_node.children[-1]).children[0])
+                    n = self.node_index.get( self.node_index.get( opt_node.children[-1]).children[0])
+                    if select:
+                        if select == n.name:
+                            yield n
+                    else:
+                        yield n 
                 #yield from fn( opt_node.children[-1], select=select)
 
     def node_iter_entry( self, nodes, select=None, fn=Tree.Tree.node_iter_depth_first):
@@ -903,6 +925,7 @@ class QCATree( Tree.Tree):
         if not hasattr( tdr_nodes, "__iter__"):
             tdr_nodes = [tdr_nodes]
         ret = {}
+        #breakpoint()
         for tdr_node in tdr_nodes:
             tdr = self.db.get( tdr_node.payload).get( "data")
             minimum_positions = tdr.get( "minimum_positions")
@@ -910,7 +933,7 @@ class QCATree( Tree.Tree):
             min_nodes = []
             for constraint_nid in tdr_node.children:
                 constraint_node = self.node_index.get( constraint_nid)
-                point = constraint_node.payload
+                point = '[' + str(constraint_node.payload[2]) + "]"
                 min_opt_id = minimum_positions.get( point)
                 min_ene_id = "QCP-" + opt_hist.get( point)[ min_opt_id]
                 #print( "grad index with min energy (min_ene_id)=", min_ene_id)
