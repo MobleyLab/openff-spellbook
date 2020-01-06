@@ -1,37 +1,48 @@
+#!/usr/bin/env python3
 import pickle
 import collections
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import itertools
 import numpy as np
+import re
 
 import offsb.tools.const as const
+import simtk.unit as unit
 
-with open('oFF-1.1.0.p', 'rb') as fid:
-    print("Loading oFF data")
-    oFF10 = pickle.load(fid)
+#with open('oFF-1.1.0.p', 'rb') as fid:
+#    print("Loading oFF data")
+#    oFF10 = pickle.load(fid)
 with open('QCA.p', 'rb') as fid:
-    print("loading QCA data")
     QCA = pickle.load(fid)
 if QCA.db is None:
     with open('QCA.db.p', 'rb') as fid:
-        print("loading QCA db")
         QCA.db = pickle.load(fid).db
 
+def tuple_to_hyphenated( x):
+    if isinstance( x, tuple):
+        return re.sub("[() ]", "", str(x).replace(",","-"))
+    else:
+        return x
 
-converters = { "Bonds" : const.bohr2angstrom, \
-               "Angles": 1.0, \
-               "ImproperTorsions": 1.0, \
-               "ProperTorsions": 1.0, \
-               "vdW": 1.0 \
+
+converters = { \
+#               "Bonds" : const.bohr2angstrom, \
+#               "Angles": 1.0, \
+#               "ImproperTorsions": 1.0, \
+#               "ProperTorsions": 1.0, \
+#               "vdW": 1.0 \
+               "MMEnergy": 1.0 \
 }
-data_chart = { "Bonds" : "bonds.p", \
-               "Angles": "angles.p", \
-               "ImproperTorsions": "outofplane.p", \
-               "ProperTorsions": "torsions.p" \
+data_chart = { \
+#               "Bonds" : "bonds.p", \
+#               "Angles": "angles.p", \
+#               "ImproperTorsions": "outofplane.p", \
+#               "ProperTorsions": "torsions.p" \
+               "MMEnergy": "oMM.oFF-Parsley.p" \
 }
 
-label_db = oFF10.db.get( "ROOT").get( "data")
+#label_db = oFF10.db.get( "ROOT").get( "data")
 
 param_types = list(data_chart.keys())
 
@@ -44,26 +55,82 @@ for param in param_types:
     with open( filename, 'rb') as fid:
 #        print("Loading", filename)
         data = pickle.load(fid)
-    for entry in QCA.iter_entry():
-        labels = oFF10.db.get( entry.payload).get( "data").get( param)
-        mol_name = QCA.db.get( entry.payload).get( "entry").name
-        for group in labels:
-            label = labels.get( group)
-            d = collections.defaultdict(list)
-            for cons in QCA.node_iter_depth_first(entry, select="Constraint"):
-                ang = eval(cons.payload)[0]
-                for opt in QCA.node_iter_depth_first( cons, select="Optimization"):
-                    ene = QCA.db.get( opt.payload).get( "data").get( "energies")[ mol_idx]
-                    # assume we are taking only minimum energy
-                    grad = QCA.node_index.get( opt.children[ mol_idx])
-                    mol = QCA.node_index.get( grad.children[0])
-                    syms = QCA.db.get( mol.payload).get( "data").get( "symbols")
-                    vals = data.db.get( mol.payload).get( group) 
-                    vals *= converters.get( param)
-                    out_str = "{:12s} {:16.10e} {:8.2f} {:4s} {:20s} {:10.4f} {:64s}"
-                    print(out_str.format(entry.payload, ene, ang, label, \
-                          "-".join([str(syms[x-1])+str(x) for x in group]), vals[0], \
-                          mol_name ))
+    key = 'canonical_isomeric_explicit_hydrogen_mapped_smiles'
+    i = 0
+    breakpoint()
+    for entry_node in QCA.iter_entry():
+        print( i, entry_node)
+        i += 1
+        #labels = oFF10.db.get( entry.payload).get( "data").get( param)
+        entry = QCA.db.get( entry_node.payload).get( "entry")
+        mol_name = entry.name
+        smiles_indexed = entry.attributes[ key]
+    #if entryA is None or entryB is None:
+    #    return False
+
+#        for group in labels:
+#            label = labels.get( group)
+#            d = collections.defaultdict(list)
+        nodes = list(QCA.node_iter_optimization_minimum( entry_node, select="Molecule"))
+        order = np.arange( len( nodes))
+        vals = []
+        for node in nodes:
+            vals.append( tuple([ c.payload[2] for c in \
+                QCA.node_iter_to_root( node, 
+                    select="Constraint")]))
+        vals = np.array( vals)
+        if len(vals) == 0:
+            continue
+        order = np.lexsort( vals.T)
+        nodes_in_order = [nodes[i] for i in order]
+        fnm = entry_node.payload + ".dat"
+        fd = open( fnm, 'w')
+        spec_written = False
+        ds = list(QCA.node_iter_to_root( entry_node))[1]
+        for mol_node in nodes_in_order:
+#            for opt in QCA.node_iter_depth_first( cons, select="Optimization"):
+            opt = next(QCA.node_iter_to_root( mol_node, select="Optimization"))
+            if not spec_written:
+                qc_spec = QCA.db.get( opt.payload).get( "data").get( "qc_spec")
+                method = str( qc_spec.method)
+                basis  = str( qc_spec.basis)
+                fd.write( ds.name + "\n" + method + "\n" + basis + "\n")
+                spec_written = True
+            if QCA.db.get( opt.payload).get( "data").get( "energies") is None:
+                fd.close()
+                continue
+            try:
+                ene = QCA.db.get( opt.payload).get( "data").get( "energies")[ mol_idx]
+            except TypeError:
+                fd.close()
+                continue
+
+            mol_id = mol_node.payload
+            # assume we are taking only minimum energy
+            syms = QCA.db.get( mol_node.payload).get( "data").get( "symbols")
+
+            try:
+                vals = data.db.get( mol_node.payload).get( "data").get("energy")
+            except Exception:
+                fd.close()
+                continue
+            vals *= converters.get( param)
+            out_str = "{:12s} {:16.10e} {:8.2f} {:4s} {:20s} {:10.4f} {:64s}"
+
+
+            ang_pl = [c.payload for c in QCA.node_iter_to_root( mol_node, select="Constraint")][0]
+            num_angs = 1 #len(ang_pl)
+            if num_angs > 1:
+                ang = [ tuple_to_hyphenated( x) for y in ang_pl for x in y]
+            else:
+                ang = [ tuple_to_hyphenated( x) for x in ang_pl]
+
+            out_str = "{:12s} {:12s} {:16.10e} "+"{:12s} {:12s} {:8.4f}"*num_angs +" {:10.4f} {:64s}\n"
+            fd.write(out_str.format( entry_node.payload, mol_id, ene, *ang, \
+                  vals.value_in_unit( vals.unit), \
+                  smiles_indexed ))
+        fd.close()
+        exit()
 
 #                    # sigh, assume vals are scalars
 #                    d[ang].append( [ene, vals[0]] )
