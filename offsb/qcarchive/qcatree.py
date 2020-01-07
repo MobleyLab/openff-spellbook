@@ -254,6 +254,9 @@ class QCATree( Tree.Tree):
             return
         mol_ids_flat = flatten_list([x for x in mols.values()], -1)
         client = self.db.get( "ROOT").get( "data")
+
+
+        print( "Downloading minimum molecules using", fn)
         fresh_obj_map = self.batch_download(mol_ids_flat, client.query_molecules)
 
         for top_node in nodes:

@@ -48,7 +48,13 @@ class Node():
     def skel( self):
         return Node( index=self.index, name=self.name, state=self.state)
 
+    def set_state( self, state):
+        self.state = state
+
     def __repr__( self):
+        return "<Node Name={} Tree={} IDX={} Payload={}>".format(
+                self.name, self.tree, self.index,  
+                "No" if self.payload is None else str( self.payload))
         return "<Node Name={} Tree={} IDX={} State={} Payload={}>".format(
                 self.name, self.tree, self.index, STATE.get( self.state), 
                 "No" if self.payload is None else str( self.payload))

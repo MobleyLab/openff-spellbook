@@ -110,7 +110,7 @@ class Tree( ABC):
 
     def register_modified( self, node, state=DIRTY):
         self.modified.add( node.index)
-        node.state = state
+        node.set_state( state)
 
     def link_tree( self, tree):
         self.link[tree.index] = tree
