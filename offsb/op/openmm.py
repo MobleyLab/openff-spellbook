@@ -17,7 +17,7 @@ from rdkit.Chem import AllChem
 from rdkit.Chem import FragmentMatcher
 from rdkit import Geometry as RDGeom
 from ..tools import const
-from .. import rdutil 
+from .. import rdutil
 from .. import qcarchive as qca
 import copy
 import numpy as np
@@ -27,7 +27,7 @@ import threading
 
 
 class OpenMMEnergy( treedi.tree.PartitionTree):
-    """ Creates an openMM system of each entry 
+    """ Creates an openMM system of each entry
         Stores the total energy of molecules
     """
 
@@ -58,7 +58,7 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
                     print("Found")
                     break
                 raise Exception("Forcefield could not be found")
-        self.forcefield= oFF.typing.engines.smirnoff.ForceField( self.abs_path, disable_version_check=True)
+        self.forcefield= oFF.typing.engines.smirnoff.ForceField( self.abs_path, disable_version_check=True, allow_cosmetic_attributes=True)
         logger.setLevel(level=level)
         print("My db is", self.db)
 
@@ -96,7 +96,7 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
         ret = rdutil.mol.embed_qcmol_3d( mol, qcmol)
         if ret < 0:
             ret_str.append("ERROR: Could not generate a conformation in RDKit. {} {}\n".format(qcmolid, target.payload))
-            qca.qcmol_to_xyz( qcmol, 
+            qca.qcmol_to_xyz( qcmol,
                 fnm="mol."+qcmolid+"."+target.payload+".rdconfgenfail.xyz", comment=qcmolid + " rdconfgen fail " + target.payload)
             return { target: ret_str }
         conf = mol.GetConformer()
@@ -105,12 +105,12 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
         #    conf = mol.GetConformer(ids[0])
         #except IndexError:
         #    print("ERROR: Could not generate a conformation in RDKit.", qcmolid, target.payload)
-        #    qca.qcmol_to_xyz( qcmol, 
+        #    qca.qcmol_to_xyz( qcmol,
         #        fnm="mol."+qcmolid+"."+target.payload+".rdconfgenfail.xyz", comment=qcmolid + " rdconfgen fail " + target.payload)
         #    continue
         #conf = mol.GetConformer(ids[0])
 
-        
+
 
         use_min_mol_for_charge = True
         if use_min_mol_for_charge:
@@ -129,10 +129,10 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
             except TypeError:
                 # ene is not a list above
                 ret_str.append("ERROR: No energies. {} {}\n".format( qcmolid, target.payload))
-                qca.qcmol_to_xyz( qcmol, 
+                qca.qcmol_to_xyz( qcmol,
                     fnm="mol."+qcmolid+"."+target.payload+".noenefail.xyz", comment=qcmolid + " noene fail " + target.payload)
                 return { target: ret_str }
-            
+
 
             if minidx == None:
                 ret_str.append("EMPTY. SKIPPING\n")
@@ -157,7 +157,7 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
             top = oFF.topology.Topology().from_molecules( mmol)
         except AssertionError:
             ret_str.append("ERROR: Could not setup molecule in oFF. {} {}\n".format( qcmolid, target.payload))
-            qca.qcmol_to_xyz( qcmol, 
+            qca.qcmol_to_xyz( qcmol,
                 fnm="mol."+qcmolid+"."+target.payload+".offmolfail.xyz", comment=qcmolid + " oFF fail " + target.payload)
             #pdb.set_trace()
             return { target: ret_str }
@@ -165,21 +165,21 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
             mmol.compute_partial_charges_am1bcc()
         except Exception:
             ret_str.append("ERROR: Could not compute partial charge. {} {}\n".format( qcmolid, target.payload))
-            qca.qcmol_to_xyz( qcmol, 
+            qca.qcmol_to_xyz( qcmol,
                 fnm="mol."+qcmolid+"."+target.payload+".chrgfail.xyz", comment=qcmolid + " charge fail "+target.payload)
             #pdb.set_trace()
             return { target: ret_str }
         gen_MM_charge = [mmol.partial_charges]
-        
+
         fail = True
         #breakpoint()
-        nodes = list(self.source.node_iter_depth_first( 
+        nodes = list(self.source.node_iter_depth_first(
             target, select="Molecule"))
         order = np.arange( len( nodes))
         vals = []
         for mol_node in nodes:
             vals.append( tuple([ c.payload[2] for c in \
-                self.source.node_iter_to_root( mol_node, 
+                self.source.node_iter_to_root( mol_node,
                     select="Constraint")]))
         vals = np.array( vals)
         order = np.lexsort( vals.T)
@@ -208,7 +208,7 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
             self.db.__setitem__( mol_node.payload, { "data": { "energy": total_ene }})
 
         if fail:
-            qca.qcmol_to_xyz( qcmol, 
+            qca.qcmol_to_xyz( qcmol,
                 fnm="mol."+qcmolid+"."+target.payload+".labelfail.xyz",
                 comment=qcmolid + " label fail " + target.payload)
         return { target: ret_str }
@@ -224,8 +224,8 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
 
         n_targets = len(targets)
 
-        
-        #exe = Pool(processes=procs) 
+
+        #exe = Pool(processes=procs)
         #work = [ exe.apply_async( OpenMMEnergy.apply_single, ( self, n, target) ) for n, target in enumerate(targets, 1) ]
         #out = [result.get() for result in work]
         #for i, val in enumerate( out):
@@ -242,12 +242,12 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
                 print( n,"/", n_targets, tgt)
                 [ print( line, end="") for line in ret ]
 
-        
+
         import concurrent.futures
-                
+
 
     def mm_potential(self, forcefield, top, xyz, charge=False):
-        
+
         if isinstance( charge, bool):
             if( charge):
                 system = forcefield.create_openmm_system( top)
@@ -262,7 +262,7 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
                 mols[ i].partial_charges = charge[ i]
             system = forcefield.create_openmm_system( top, charge_from_molecules=mols)
 
-                                           
+
         integrator = openmm.VerletIntegrator(1.0 * simtk.unit.femtoseconds)
         context = openmm.Context(system, integrator)
         context.setPositions(xyz * const.angstrom2nm)
@@ -275,7 +275,7 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
         if(component is None):
             ene = self.mm_potential(forcefield, top, xyz, charge=charge)
             return ene
-            
+
         modff = copy.deepcopy(forcefield)
 
         force = modff.get_parameter_handler(component)
@@ -287,7 +287,7 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
             if(component in ["ProperTorsions", "ImproperTorsions"]):
                 for i,_ in enumerate(term.k):
                     term.k[i] *= 0.0
-            
+
         ene = self.mm_potential(modff, top, xyz, charge=charge)
         return ene
 
@@ -349,7 +349,7 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
         #log.write("    MM {:18s}= {:9.4f} {:s}\n\n".format("App Min Energy",
         #    (sim_min_ene.value_in_unit(simtk.unit.kilocalorie_per_mole)),
         #    str(simtk.unit.kilocalorie_per_mole)))
-        
+
 
         #log.flush()
 #        ene_sum = total_ene
