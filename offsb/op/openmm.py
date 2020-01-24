@@ -130,13 +130,10 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
                 # ene is not a list above if TypeError
                 # IndexError it is []
                 ret_str.append("ERROR: No energies. {} {}\n".format( qcmolid, target.payload))
-<<<<<<< HEAD
                 ret_str.append(str(e))
-                qca.qcmol_to_xyz( qcmol, 
-=======
-                qca.qcmol_to_xyz( qcmol,
->>>>>>> 1eaec49403f86a9a77b7720c358b2a17a6647be7
-                    fnm="mol."+qcmolid+"."+target.payload+".noenefail.xyz", comment=qcmolid + " noene fail " + target.payload)
+                qca.qcmol_to_xyz( qcmol, \
+                    fnm="mol."+qcmolid+"."+target.payload+".noenefail.xyz",\
+                    comment=qcmolid + " noene fail " + target.payload)
                 return { target: ret_str }
 
 
