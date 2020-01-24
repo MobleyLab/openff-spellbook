@@ -126,9 +126,11 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
                     elif ene < minene:
                         minene = ene
                         minidx = opt.children[-1]
-            except TypeError:
-                # ene is not a list above
+            except (TypeError, IndexError) as e:
+                # ene is not a list above if TypeError
+                # IndexError it is []
                 ret_str.append("ERROR: No energies. {} {}\n".format( qcmolid, target.payload))
+                ret_str.append(str(e))
                 qca.qcmol_to_xyz( qcmol, 
                     fnm="mol."+qcmolid+"."+target.payload+".noenefail.xyz", comment=qcmolid + " noene fail " + target.payload)
                 return { target: ret_str }
