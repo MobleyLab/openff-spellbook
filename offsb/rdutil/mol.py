@@ -4,6 +4,7 @@ from rdkit.Chem import AllChem
 from rdkit.Chem import FragmentMatcher
 from rdkit import Geometry as RDGeom
 from ..tools import const
+from rdkit.Chem.rdchem import Conformer
 
 
 def build_from_smiles( smiles_pattern):
@@ -32,4 +33,17 @@ def embed_qcmol_3d( mol, qcmol):
     assert map_idx is not None
     xyz = qcmol.get("geometry") * const.bohr2angstrom
     coordMap = {i : RDGeom.Point3D( *xyz[ map_idx[ i]-1]) for i in map_idx}
-    return AllChem.EmbedMolecule( mol, coordMap=coordMap  )
+
+    n = mol.GetNumAtoms()
+    conf = Conformer(n)
+    conf.Set3D(True)
+    for i in range(n):
+        conf.SetAtomPosition(i, coordMap[i])
+    ret = mol.AddConformer(conf, assignId=True)
+    # not sure if this can fail, so just accept anything 
+    return ret > -1
+
+    #ret = AllChem.EmbedMolecule( mol, coordMap=coordMap, forceTol=.01, 
+    #        ignoreSmoothingFailures=True, maxAttempts=100000,
+    #        useBasicKnowledge=False )
+    #return ret

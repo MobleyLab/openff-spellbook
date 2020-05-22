@@ -23,6 +23,7 @@ import copy
 import numpy as np
 from multiprocessing import Pool
 import threading
+import sys
 
 
 
@@ -175,18 +176,22 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
         gen_MM_charge = [mmol.partial_charges]
 
         fail = True
-        #breakpoint()
         nodes = list(self.source.node_iter_depth_first(
             target, select="Molecule"))
         order = np.arange( len( nodes))
         vals = []
         for mol_node in nodes:
-            vals.append( tuple([ c.payload[2] for c in \
+            val = tuple([ c.payload[2] for c in \
                 self.source.node_iter_to_root( mol_node,
-                    select="Constraint")]))
-        vals = np.array( vals)
-        order = np.lexsort( vals.T)
-        nodes_in_order = [nodes[i] for i in order]
+                    select="Constraint")])
+            if len(val) > 0:
+                vals.append(val)
+        if len(vals) > 0:
+            vals = np.array( vals)
+            order = np.lexsort( vals.T)
+            nodes_in_order = [nodes[i] for i in order]
+        else:
+            nodes_in_order = nodes
         for mol_node in nodes_in_order:
             fail = True
             qcmol = self.source.db[ mol_node.payload][ 'data']
@@ -194,6 +199,7 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
             xyz = xyz * const.bohr2angstrom
             xyz = unmap( xyz, map_idx)
             try:
+                exc_info = sys.exc_info()
                 total_ene = self.calc_mm_energy( top, xyz, charge=gen_MM_charge)
                 fail = False
             except UnassignedProperTorsionParameterException as e:
@@ -202,7 +208,10 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
                 break
             except Exception as e:
                 ret_str.append("ERROR: oFF exception for {} {}\n".format( qcmolid, target.payload))
+                ret_str.append( str(e.__traceback__().__repr__()) + '\n' )
                 ret_str.append( str(e) + '\n')
+                raise
+
                 break
 
 

@@ -48,6 +48,9 @@ class Node():
     def skel( self):
         return Node( index=self.index, name=self.name, state=self.state)
 
+    def copy( self):
+        return Node( index=self.index, name=self.name, state=self.state, payload=self.payload)
+
     def set_state( self, state):
         self.state = state
 

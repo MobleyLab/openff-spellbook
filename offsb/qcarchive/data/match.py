@@ -1,9 +1,11 @@
 import pickle
 import offsb.qcarchive.qcatree as qca
+
 with open("QCA.p", 'rb') as fid:
     QCA = pickle.load(fid)
 with open("QCA.db.p", 'rb') as fid:
     QCA.db = pickle.load(fid).db
+
 nodes = QCA.combine_by_entry(fn=qca.match_canonical_isomeric_explicit_hydrogen_smiles)
 
 print( "There are", len(nodes), "unique mols")

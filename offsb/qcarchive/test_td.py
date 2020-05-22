@@ -19,7 +19,7 @@ def select_param( lbl):
         oFF_param = "ImproperTorsions"
     elif letter == 'n':
         oFF_param = "vdW"
-    
+
     return oFF_param
 
 def plot_displacement( ax, dat, label_obj, displacement_fn=None):
@@ -53,7 +53,7 @@ def plot_displacement( ax, dat, label_obj, displacement_fn=None):
         ax.axhline(y=equil - delta, ls='--', marker='.', color='black', ms=10, mec='black', mfc=color)
 
 def select_data_of_oFFlabel_from_td(QCAtree, oFFtree, datatree, query, entry=None, verbose=False):
-    
+
     oFF_param = select_param( query)
 
     hits = []
@@ -93,7 +93,7 @@ def select_data_of_oFFlabel_from_td(QCAtree, oFFtree, datatree, query, entry=Non
 
                 vals = dobj.get( pair)
                 result.append([ID, molid, query, pair, angle, vals, smiles])
-                pair="-".join([str(k) for k in pair])  
+                pair="-".join([str(k) for k in pair])
                 if verbose:
                     print("Entry({:11s}) {:16s} {:16s} {} {:4s} {:4.0f} {} {:64s}".format( status, ID, molid, pair, query, angle, vals, smiles))
 
@@ -140,7 +140,7 @@ def plot_td_all_minima( ang, vals, label_obj, displacement_fn=None):
     ax_grid[0][0].legend(loc='upper right')
 
     ax_grid[0][1].hist(vals,bins=100, histtype='step', orientation='horizontal')
-    
+
     plot_displacement( ax_grid[0][0], vals, label_obj, displacement_fn)
     plot_displacement( ax_grid[0][1], vals, label_obj, displacement_fn)
     return fig
@@ -159,7 +159,7 @@ def plot_td_minima( ang, vals, atoms, label_obj, molid=None, displacement_fn=Non
     for r in range(rows):
         ax = [plt.subplot2grid((rows,3),(r,0), colspan=2, fig=fig)]
         ax.append(plt.subplot2grid((rows,3),(r,2), fig=fig, sharey=ax[0]))
-        ax_grid.append(ax) 
+        ax_grid.append(ax)
     label = label_obj.get( "id")
     labels = set()
     #print(ang[0])
@@ -186,9 +186,9 @@ def plot_td_minima( ang, vals, atoms, label_obj, molid=None, displacement_fn=Non
         thislabel = label
         if thislabel in labels:
             thislabel=""
-        labels.add(label)    
+        labels.add(label)
         ax_grid[0][0].plot(ang_i, vals_i, lw=0.1, ls='-', marker='.' , color=color, label=thislabel, ms=2, alpha=.3)
-        
+
     ax_grid[0][0].legend(loc='upper right')
     ax_grid[0][1].hist(vals,bins=100, histtype='step', orientation='horizontal')
 
@@ -215,12 +215,12 @@ def example_bonds():
 
         val = []
         [val.extend(x[5]) for x in ret]
-        val = np.array(val)                                                                   
-        
-        ang = np.array( [x[4] for x in ret])                                                                                                         
-        label_obj = oFF.db[ "ROOT"][ "data"][ "Bonds"][ q]                                                                          
-        atoms = [(x[0], *x[3]) for x in ret]                                                                                                        
-        fig = plot_td_minima( ang , val * const.bohr2angstrom, atoms, label_obj, molid=None, displacement_fn=bond_disp)                             
+        val = np.array(val)
+
+        ang = np.array( [x[4] for x in ret])
+        label_obj = oFF.db[ "ROOT"][ "data"][ "Bonds"][q]
+        atoms = [(x[0], *x[3]) for x in ret]
+        fig = plot_td_minima( ang , val * const.bohr2angstrom, atoms, label_obj, molid=None, displacement_fn=bond_disp)
         if entry is None:
             figname = q + "." + "all" + ".min.png"
         else:
@@ -233,9 +233,9 @@ def example_bonds():
             print( "{:4s} {:3d} {:s}".format( q, len(val), QCA.name))
 
 
-    for q in labels:                                                                                                                                    
+    for q in labels:
         collect_and_plot( QCA, oFF, bonds, q, entry=None, verbose=False)
-        for entry in QCA.iter_entry():                                                                                                                  
+        for entry in QCA.iter_entry():
             collect_and_plot( QCA, oFF, bonds, q, entry=entry, verbose=False)
 
 

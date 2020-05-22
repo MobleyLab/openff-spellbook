@@ -50,7 +50,7 @@ class Tree( ABC):
             root = Node( name=ROOT )
             root.payload = ROOT
 
-            self.db.__setitem__( ROOT, { "data": root_payload } )
+            self.db[ROOT] = { "data": root_payload }
 
 
             root.index = '0'
@@ -80,6 +80,7 @@ class Tree( ABC):
         self.ID = ".".join([self.index, self.name])
 
     def to_pickle(self, db=True, index=True, name=None):
+
         import pickle
         if name is None:
             name = self.name + ".p"
@@ -122,6 +123,15 @@ class Tree( ABC):
         tree.source = self
         return tree
 
+    def root( self):
+        return self.node_index[self.root_index]
+
+    def __setitem__(self, k, v):
+        self.node_index[k] = v
+
+    def __getitem__(self, k):
+        return self.node_index[k]
+
     def join( self, nodes, fn=link_iter_breadth_first):
         ret = {}
         if not hasattr(nodes, "__iter__"):
@@ -129,20 +139,20 @@ class Tree( ABC):
         for node in nodes:
             ret[ node.index] = {}
             for tree in fn( self):
-                ret[ node.index][ tree.name] = tree.node_index.get( node.index) 
+                ret[ node.index][ tree.name] = tree[node.index]
         return ret
 
     def copy_skel( self):
         """ provides a new tree with no payload or links """
         nodes = {node.index: node for node in [node.skel() for node in self.node_index.values()]}
         for node in nodes.values():
-            [node.add( nodes.get( v.index)) for v in self.node_index.get( node.index).children]
+            [node.add( nodes[v.index]) for v in self[node.index].children]
         tree = Tree( nodes=nodes, name=self.name)
         [tree.register_modified( node) for node in self.node_index.values()]
         return tree
 
     def register_db_payload( self, key, payload):
-        self.db.__setitem__(key, payload)
+        self.db[key] = payload
 
     def add(self, parent_index, child):
         """
@@ -153,12 +163,12 @@ class Tree( ABC):
         assert self.N not in self.node_index
         assert isinstance( parent_index, str)
 
-        parent = self.node_index.get( parent_index)
+        parent = self[parent_index]
         child.index = str(self.N) #+ '-' + child.index
         self.N += 1
         parent.add( child)
         child.tree=self.name
-        self.node_index.__setitem__( child.index, child)
+        self[child.index] = child
         
         #self.obj_index.update( child.payload)
         #self.node_index[child.] = child
@@ -171,14 +181,14 @@ class Tree( ABC):
 
     def assemble( self):
         for ID in self.node_index:
-            node = self.node_index.get( ID)
+            node = self[ID]
             if isinstance( node.parent, str):
-                node.parent = self.node_index.get( node.parent)
+                node.parent = self[node.parent]
             for i,_ in enumerate( node.children):
                 if isinstance( node.children[i], str):
-                    node.children[i] = self.node_index.get( node.children[i])
+                    node.children[i] = self[node.children[i]]
         if isinstance( self.root, str):
-            self.root = self.node_index.get( self.root)
+            self.root = self[self.root]
 
     def yield_if( self, v, select, state):
         if select is None or select == v.name :
@@ -187,7 +197,7 @@ class Tree( ABC):
 
     def node_iter_depth_first( self, v, select=None, state=None):
         for c in v.children:
-            c = self.node_index.get( c)
+            c = self[c]
             yield from self.node_iter_depth_first( c, select, state)
         yield from self.yield_if( v, select, state)
 
@@ -195,47 +205,47 @@ class Tree( ABC):
         if v.parent is None:
             yield v
         for c in v.children:
-            c = self.node_index.get( c)
+            c = self[c]
             yield from self.yield_if( c, select, state)
         for c in v.children:
-            c = self.node_index.get( c)
+            c = self[c]
             yield from self.node_iter_breadth_first( c, select, state)
 
     def node_iter_dive( self, v, select=None, state=None):
         yield from self.yield_if( v, select, state)
         for c in v.children:
-            c = self.node_index.get( c)
+            c = self[c]
             yield from self.node_iter_dive( c, select, state)
 
     def node_iter_to_root( self, v, select=None, state=None):
         yield from self.yield_if( v, select, state)
         if v.parent is not None:
-            parent = self.node_index.get( v.parent)
+            parent = self[v.parent]
             yield from self.node_iter_to_root( parent, select, state)
 
     def get_root( self, node):
         if node.parent is None:
             return node
-        return self.get_root( self.node_index.get( node.parent))
+        return self.get_root( self[node.parent])
 
     def node_depth( self, node):
         n = node
         l = 0
         while n.parent is not None:
-            n = self.node_index.get( n.parent)
+            n = self[n.parent]
             l += 1
         return l
 
     def node_descendents( self, node):
         if len( node.children) == 0:
             return 0
-        return 1 + sum([ self.node_descendents( self.node_index.get( v)) for v in node.children])
+        return 1 + sum([ self.node_descendents( self[v]) for v in node.children])
 
     def node_level( self, node):
         l = 1
         v = node
         while v.parent is not None:
-            v = self.node_index.get( v.parent)
+            v = self[v.parent]
             l += 1
         return l 
 

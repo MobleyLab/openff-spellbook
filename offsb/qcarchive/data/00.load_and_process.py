@@ -34,15 +34,22 @@ def load():
         client_node = Node.Node( payload=client, name="client")
         QCA = qca.QCATree( NAME, root_payload=client, node_index=None, db=None )
 
-        DS_TYPE = "torsiondrivedataset"
         DS_NAME = "OpenFF Trivalent Nitrogen Set 1"
         DS_NAME = "SMIRNOFF Coverage Torsion Set 1"
+
+        DS_TYPE = "TorsionDriveDataset"
+        DS_NAME = "OpenFF Gen 2 Torsion Set 2 Coverage"
         client.get_collection( DS_TYPE, DS_NAME)
         ds = client.get_collection( DS_TYPE, DS_NAME)
 
-        # since we know there are no Hessians, skip looking for them
         drop=[]
-        drop.append("Hessian")
+        # since we know there are no Hessians, skip looking for them
+        #drop.append("Hessian")
+        QCA.build_index( ds, drop=drop)
+
+        DS_TYPE = "OptimizationDataset"
+        DS_NAME = "OpenFF Gen 2 Opt Set 2 Coverage"
+        ds = client.get_collection( DS_TYPE, DS_NAME)
         QCA.build_index( ds, drop=drop)
 
         # this will download the final structure of *all* minimizations found
@@ -136,4 +143,4 @@ def process( QCA=None):
 
 if __name__ == "__main__":
     QCA = load()
-    process(QCA)
+    #process(QCA)

@@ -43,8 +43,8 @@ data_chart = { \
 #               "Angles": "angles.p", \
 #               "ImproperTorsions": "outofplane.p", \
 #               "ProperTorsions": "torsions.p" \
-               "MMEnergyA": "oMM.oFF-Parsley-constr", \
-               "MMEnergyB": "oMM.oFF-Parsley-uncons"  \
+               "MMEnergyA": "oMM.oFF-Parsley-uncons.p" \
+#               "MMEnergyB": "oMM.oFF-Parsley-uncons"  \
 }
 
 #label_db = oFF10.db.get( "ROOT").get( "data")
