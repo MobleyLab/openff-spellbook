@@ -37,7 +37,8 @@ class Tree( ABC):
 
 
     """
-    def __init__( self, name, root_payload=None, node_index=None, db=None, index=None, payload=None):
+    def __init__(self, name, root_payload=None, node_index=None, 
+            db=None, index=None, payload=None):
 
         if db is not None:
             self.db = db
@@ -124,7 +125,7 @@ class Tree( ABC):
         return tree
 
     def root( self):
-        return self.node_index[self.root_index]
+        return self[self.root_index]
 
     def __setitem__(self, k, v):
         self.node_index[k] = v
@@ -151,9 +152,6 @@ class Tree( ABC):
         [tree.register_modified( node) for node in self.node_index.values()]
         return tree
 
-    def register_db_payload( self, key, payload):
-        self.db[key] = payload
-
     def add(self, parent_index, child):
         """
         takes a parent node index and a fresh constructed node
@@ -162,6 +160,7 @@ class Tree( ABC):
 
         assert self.N not in self.node_index
         assert isinstance( parent_index, str)
+        #print("Adding", self[parent_index], "->", child)
 
         parent = self[parent_index]
         child.index = str(self.N) #+ '-' + child.index
@@ -169,7 +168,7 @@ class Tree( ABC):
         parent.add( child)
         child.tree=self.name
         self[child.index] = child
-        
+        return child
         #self.obj_index.update( child.payload)
         #self.node_index[child.] = child
         #self.n_levels = max(self.n_levels, 1 + node_level( parent))
@@ -190,18 +189,32 @@ class Tree( ABC):
         if isinstance( self.root, str):
             self.root = self[self.root]
 
-    def yield_if( self, v, select, state):
+    def yield_if_single( self, v, select, state):
         if select is None or select == v.name :
             if state is None or state == v.state :
                 yield v
 
-    def node_iter_depth_first( self, v, select=None, state=None):
+    def yield_if( self, v, select, state):
+        if hasattr(v, "__iter__"):
+            for vi in v:
+                yield from self.yield_if(vi, select, state)
+        else:
+            yield from self.yield_if_single(v, select, state)
+
+    def node_iter_depth_first_single( self, v, select=None, state=None):
         for c in v.children:
             c = self[c]
-            yield from self.node_iter_depth_first( c, select, state)
+            yield from self.node_iter_depth_first_single( c, select, state)
         yield from self.yield_if( v, select, state)
 
-    def node_iter_breadth_first(self, v, select=None, state=None):
+    def node_iter_depth_first( self, v, select=None, state=None):
+        if hasattr(v, "__iter__"):
+            for vi in v:
+                yield from self.node_iter_depth_first( vi, select, state)
+        else:
+            yield from self.node_iter_depth_first_single( v, select, state)
+
+    def node_iter_breadth_first_single(self, v, select=None, state=None):
         if v.parent is None:
             yield v
         for c in v.children:
@@ -209,19 +222,40 @@ class Tree( ABC):
             yield from self.yield_if( c, select, state)
         for c in v.children:
             c = self[c]
-            yield from self.node_iter_breadth_first( c, select, state)
+            yield from self.node_iter_breadth_first_single( c, select, state)
+    
+    def node_iter_breadth_first(self, v, select=None, state=None):
+        if hasattr(v, "__iter__"):
+            for vi in v:
+                yield from self.node_iter_breadth_first(vi, select, state)
+        else:
+            yield from self.node_iter_breadth_first_single(v, select, state)
 
-    def node_iter_dive( self, v, select=None, state=None):
-        yield from self.yield_if( v, select, state)
+    def node_iter_dive_single( self, v, select=None, state=None):
+        yield from self.yield_if_single( v, select, state)
         for c in v.children:
             c = self[c]
-            yield from self.node_iter_dive( c, select, state)
+            yield from self.node_iter_dive_single( c, select, state)
 
-    def node_iter_to_root( self, v, select=None, state=None):
-        yield from self.yield_if( v, select, state)
+    def node_iter_dive( self, v, select=None, state=None):
+        if hasattr(v, "__iter__"):
+            for vi in v:
+                yield from self.node_iter_dive( vi, select, state)
+        else:
+            yield from self.node_iter_dive_single( v, select, state)
+
+    def node_iter_to_root_single( self, v, select=None, state=None):
+        yield from self.yield_if_single( v, select, state)
         if v.parent is not None:
             parent = self[v.parent]
-            yield from self.node_iter_to_root( parent, select, state)
+            yield from self.node_iter_to_root_single( parent, select, state)
+
+    def node_iter_to_root( self, v, select=None, state=None):
+        if hasattr(v, "__iter__"):
+            for vi in v:
+                yield from self.node_iter_to_root(vi, select, state)
+        else:
+            yield from self.node_iter_to_root_single(v, select, state)
 
     def get_root( self, node):
         if node.parent is None:
@@ -240,14 +274,6 @@ class Tree( ABC):
         if len( node.children) == 0:
             return 0
         return 1 + sum([ self.node_descendents( self[v]) for v in node.children])
-
-    def node_level( self, node):
-        l = 1
-        v = node
-        while v.parent is not None:
-            v = self[v.parent]
-            l += 1
-        return l 
 
 class PartitionTree( Tree):
     """ A parition tree holds indices and applies them to nodes 
@@ -350,64 +376,42 @@ class EnergyTree( PartitionTree):
 
 class TreeOperation( PartitionTree):
 
-    def __init__( self, source_tree, name):
-        super().__init__( source_tree, name)
-        #for k in self.source.index:
-        #    self.index[ k] = self.source.index[ k].skel()
+    def __init__(self, source_tree, name):
+        super().__init__(source_tree, name)
 
     @abstractmethod
     def op(self, node, partition):
         pass
     
-    def apply( self, targets=None):
+    def apply(self, targets=None):
         calcs = 0
-        self.source.apply( targets=targets)
-        #print( self.source.db.get( 'QCP-1762049'))
+        self.source.apply(targets=targets)
         if targets is None:
             entries = list(self.source.source.iter_entry())
         else:
             entries = targets
-        #print( "Op will iterate on", entries )
-        if not hasattr( entries, "__iter__"):
+        if not hasattr(entries, "__iter__"):
             entries = [entries]
-        #print( "Op will iterate on", len(entries), "entries")
+
         for entry in entries:
             mol_calcs = 0
-            #self.source.apply( entry)
-            obj = self.source.db.get( self.source.node_index.get( entry.index).payload )
-            #print( "QUERY FROM SOURCE DB", self.source.node_index.get( entry.index))
+            obj = self.source.db[self.source[entry.index].payload]
 
-            #print( "ENTRY", self.node_index.get( entry.index), obj, end="\n")
+            masks = obj["data"]
 
-            masks = obj.get( "data")
-            #print( "Have ", len(masks), "masks and", len( list(node_iter_depth_first( entry, select="Molecule"))), "structures" )
-            #print( masks)
-            #for masks in self.source.node_index[ entry.index].payload.values():
-                #print( "  MASK", mask)
-            gen = list(self.node_iter_depth_first( entry, select="Molecule"))
-            #print( "Op will iterate on", len(gen), "molecules")
-            for mol_node in gen:
-                mol = self.source.source.db.get( mol_node.payload)
+            for mol_node in self.node_iter_depth_first(entry, select="Molecule"):
+                mol = self.source.source.db[mol_node.payload]
                 for mask in masks:
-                    #print(entry.name, mol, mask)
                     ret = {}
                     if mol_node.payload in self.db:
                         ret = self.db.get( mol_node.payload)
                     else:
-                        self.db.__setitem__( mol_node.payload, {})
-                    #entry_this_mol = next( node_iter_to_root( mol, select="TorsionDrive"))
-                    
-                    #print( "Molecule from", entry_this_mol.payload.get( "meta").name, "has shape", mol.payload.get( "geometry").shape)
-                    ret[ tuple( mask)] = self.op( mol.get( "data"), [i-1 for i in mask])
-                    self.db[ mol_node.payload].update( ret)
-                    #self.node_index[ mol.index].state = CLEAN
+                        self.db[mol_node.payload] = dict()
+
+                    ret[tuple(mask)] = self.op( mol["data"], [i-1 for i in mask])
+                    self.db[mol_node.payload].update( ret)
                     mol_calcs += 1
-                    #print( "    MOL", mol, self.node_index[ mol.index].payload.keys() )
+
             calcs += mol_calcs
-            #print( ": calcs = ", mol_calcs)
         print(self.name + " calculated: {}".format( calcs))
-        #self.partition.update()
-        #for k in self.index:
-        #    if self.index[ k].payload is None:
-        #        self.index[ k].payload = {}
 

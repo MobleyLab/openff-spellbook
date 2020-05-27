@@ -28,7 +28,7 @@ class Node():
             parent.add( self)
         self.children = []
         if index is None:
-            self.index = 'N-' + str( Node.index)
+            self.index = str(Node.index)
             Node.index += 1
         else:
             self.index = str( index)

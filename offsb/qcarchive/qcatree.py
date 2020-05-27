@@ -95,15 +95,15 @@ class QCATree( Tree.Tree):
             ref_obj = self.db[ ref.payload]['entry']
             used.add( i)
 
-            node = Node.Node( name="Folder", index="", payload=repr( fn))
+            node = Node.Node(name="Folder", index="", payload=repr( fn))
             node.add( ref )
 
             for j in range( i+1, len( entries)):
                 entry = entries[j].copy()
                 entry_obj = self.db[ entry.payload]['entry']
                 if fn( ref_obj, entry_obj):
-                    node.add( entry)
-                    used.add( j)
+                    node.add(entry)
+                    used.add(j)
             new_nodes.append( node)
 
         return new_nodes
@@ -127,14 +127,14 @@ class QCATree( Tree.Tree):
         """
         assert self._obj_is_qca_collection( ds)
         
-        ds_id = str(ds.data.id)
+        ds_id = 'QCD-' + str(ds.data.id)
         # the object going into the data db
         pl = { 'data': ds }
         self.db[ds_id] = pl
 
         # create the index node for the tree and integrate it
         ds_node = Node.Node( name=ds.data.name, payload=ds_id )
-        self.add( self.root_index, ds_node)
+        ds_node = self.add( self.root_index, ds_node)
 
         self.expand_qca_dataset_as_tree( ds_node.index, skel=True, drop=drop,
                 **kwargs)
@@ -149,6 +149,16 @@ class QCATree( Tree.Tree):
         Drop specificies which records to ignore, for example ["Hessian"] will
         prevent searching for any Hessians, which is usually true for torsion
         drives. This is useful since Hessian searches are somewhat costly.
+
+        Drop strings correspond to the names applied to the nodes in this order:
+            "DS name" (The name of the dataset)
+            "Specification"
+            "TorsionDrive" / "GridOpt" (if present in the dataset)
+            "Optimization"
+            "Gradient"
+            "Molecule"
+            "Hessian"
+
         """
 
         if drop is not None:
@@ -156,13 +166,13 @@ class QCATree( Tree.Tree):
         else:
             self.drop = []
 
-        node = self.node_index.get( nid)
+        node = self[nid]
         payload = self
-        oid = self.node_index.get( nid).payload
+        oid = node.payload
         obj = self.db[oid]["data"]
 
-        fn = self.vtable( obj)
-        fn( nid, skel=skel, **kwargs)
+        fn = self.vtable(obj)
+        fn(nid, skel=skel, **kwargs)
 
         self.drop = []
 
@@ -416,13 +426,16 @@ class QCATree( Tree.Tree):
         return obj_map
 
 
-    def branch_ds( self, nid, name, fn, skel=False, start=0, limit=0):
+
+    def branch_ds( self, nid, name, fn, skel=False, start=0, limit=0, keep_specs=None):
         """ Generate the individual entries from a dataset """
-        if name in self.drop:
+
+        if "Entry" in self.drop:
             return
         suf = "QCP-"
-        node = self[nid]
-        ds = self.db[node.payload]["data"]
+        ds_node = self[nid]
+        ds = self.db[ds_node.payload]["data"]
+        ds_specs = ds.data.specs
         records = ds.data.records
         if limit > 0 and limit < len(records):
             records = dict(list(records.items())[start:start+limit])
@@ -430,63 +443,114 @@ class QCATree( Tree.Tree):
         client = self.db["ROOT"]["data"]
 
         specs = [list(entry.object_map.keys()) for entry in records.values()]
-        specs = list(set(flatten_list([ x for x in specs if len(x) > 0 ])))
+        specs = list(set(flatten_list(specs, -1)))
+        print("Specs gathered", specs)
+        if not keep_specs is None:
+            print("Specs wanted", keep_specs)
+            specs = [s for s in specs if s in keep_specs]
+        #specs = list(set(flatten_list([ x for x in specs if len(x) > 0 ])))
+
+        spec_map_ids = {}
 
         for spec in specs:
-            print("Expanding spec", spec)
-            ids = [suf + str(entry.object_map[spec]) 
+            new_ids = [suf + str(entry.object_map[spec]) 
                 for entry in records.values() if spec in entry.object_map]
+            spec_map_ids[spec] =  new_ids 
 
-            print("Items found:", len(ids))
-            if len(ids) == 0:
-                continue
-            print("Downloading", name, "information for", len( flatten_list( ids, times=-1)))
-            obj_map = self.batch_download( ids, client.query_procedures) 
+        print("Specs found (",len(specs),":", specs)
+        #[suf + str(entry.object_map[spec]) 
+        #    for entry in records.values() if spec in entry.object_map]
+        ids = flatten_list(list(spec_map_ids.values()), times=-1)
+        print("Downloading", name, "information for", len( ids))
 
-            nodes = []
-            spec_data = None
-            for index,obj in obj_map.items():
-                entry_match = None
-                for entry in records.values():
-                    if suf + str(entry.object_map[spec]) == index:
-                        entry_match = entry
-                        break
+        # returns an inverse map, where the values are keys to the dl data
+        obj_map = self.batch_download( ids, client.query_procedures) 
 
-                if entry_match is None:
-                    raise IndexError("Could not match Entry to Record")
-                pl = { "entry": entry_match, "data": obj}
-                self.db[index] = pl
-                if spec_data is None:
-                    spec_data = obj['qc_spec'].dict()
-                nodes.append( Node.Node(name=name, payload=index))
-            spec_node = Node.Node( name="Specification", payload='QCS-'+spec)
-            self.add( node.index, spec_node)
-            if 'QCS-' + spec not in self.db:
-                self.db['QCS-' + spec] = spec_data
-            [self.add( spec_node.index, v) for v in nodes]
+        # retreive all of the initial molecule IDs
+        init_mol_ids = [obj["initial_molecule"] for obj in obj_map.values()]
+        init_mols_are_lists = False
+        if isinstance( init_mol_ids[0], list):
+            init_mols_are_lists = True
+            init_mol_ids = [ str(x[0]) for x in init_mol_ids]
+        init_mol_ids = ["QCM-" + x for x in init_mol_ids]
 
-            init_mol_ids = [obj["initial_molecule"] for obj in obj_map.values()]
-            init_mols_are_lists = False
-            if isinstance( init_mol_ids[0], list):
-                init_mols_are_lists = True
-                init_mol_ids = [ str(x[0]) for x in init_mol_ids]
-            init_mol_ids = ["QCM-" + x for x in init_mol_ids]
+        print("Downloading", name, "initial molecules for  for", len( init_mol_ids))
+        init_mol_map = self.batch_download( init_mol_ids, client.query_molecules)
+        
+        # add this entry node
+        nodes = []
+        for rec in records:
+            pl_name = "QCE-"+str(rec)
+            node = Node.Node(name="Entry", payload=pl_name)
+            node = self.add( ds_node.index, node)
+            self.db[pl_name] = { "data": records[rec] }
+            # add the specs for this entry
+            if "Specification" in self.drop:
+                return
+            for spec,procedures in spec_map_ids.items():
+                pl_name = "QCS-"+str(spec)
+                spec_node = Node.Node(name="Specification", payload=pl_name)
+                spec_node = self.add(node.index, spec_node)
+                self[pl_name] = {"data": ds_specs[spec.lower()].dict()}
 
-            print("Downloading", name, "initial molecules for  for", len( init_mol_ids))
-            init_mol_map = self.batch_download( init_mol_ids, client.query_molecules)
-                
+                if name in self.drop:
+                    return
 
-            for node in nodes:
-                qcid = self.db[node.payload]
-                if init_mols_are_lists:
-                    molid = 'QCM-' + str(qcid["data"]["initial_molecule"][0])
-                else:
-                    molid = 'QCM-' + str(qcid["data"]["initial_molecule"])
-                mol_obj = init_mol_map[molid]
-                self.db[molid] = { "data": mol_obj}
+                for proc in procedures:
+                    if proc != "QCP-" + records[rec].object_map[spec]:
+                        continue
+                    pl_name = proc
+                    pload = {"data": obj_map[proc]}
+                    proc_node = Node.Node(name=name, payload=pl_name)
+                    proc_node = self.add(spec_node.index, proc_node)
+                    self.db[pl_name] = pload
 
-            # descend into the next type of nodes
-            fn([node.index for node in nodes], skel=skel)
+                    # expand these nodes below
+                    nodes.append(proc_node)
+
+                    # perhaps inefficient, but add init mols as we travel
+                    # the data, rather than all at once
+                    # should help with debugging
+                    molid = pload["data"]["initial_molecule"]
+                    if init_mols_are_lists:
+                        molid = molid[0]
+                    molid = "QCM-" + molid
+                    mol_obj = init_mol_map[molid]
+                    self.db[molid] = {"data": mol_obj}
+
+#        nodes = []
+#        spec_data = None
+#        for index,obj in obj_map.items():
+#            entry_match = None
+#            for entry in records.values():
+#                if suf + str(entry.object_map[spec]) == index:
+#                    entry_match = entry
+#                    break
+#
+#            if entry_match is None:
+#                raise IndexError("Could not match Entry to Record")
+#            pl = { "entry": entry_match, "data": obj}
+#            self.db[index] = pl
+#            if spec_data is None:
+#                spec_data = obj['qc_spec'].dict()
+#                self.db['QCS-' + spec] = spec_data
+#            procedure = Node.Node(name=name, payload=index)
+#            procedure = self.add( spec_node.index, procedure)
+#
+#            # add to list to expand later below
+#            nodes.append(procedure)
+
+#        for node in nodes:
+#            qcid = self.db[node.payload]
+#            if init_mols_are_lists:
+#                molid = 'QCM-' + str(qcid["data"]["initial_molecule"][0])
+#            else:
+#                molid = 'QCM-' + str(qcid["data"]["initial_molecule"])
+#            mol_obj = init_mol_map[molid]
+#            self.db[molid] = { "data": mol_obj}
+
+        # descend into the next type of nodes
+        fn([node.index for node in nodes], skel=skel)
 
     def branch_torsiondrive_ds( self, node, skel=False, **kwargs):
         """ Generate the individual torsiondrives """
@@ -545,12 +609,12 @@ class QCATree( Tree.Tree):
                         tuple(scan.get( "indices")), 
                         step)
                 constraint_node = Node.Node( payload=pl , name="Constraint")
-                self.add( node.index, constraint_node)
+                constraint_node = self.add( node.index, constraint_node)
 
                 index = 'QCP-' + opts
                 opt_node = Node.Node( name="Optimization", payload=index)
                 opt_nodes.append(opt_node)
-                self.add(constraint_node.index, opt_node)
+                opt_node = self.add(constraint_node.index, opt_node)
                 self.db[index] = { "data": opt_map[index] }
 
         self.branch_optimization_record( [x.index for x in opt_nodes], skel=skel)
@@ -571,10 +635,20 @@ class QCATree( Tree.Tree):
         opt_ids = [list( self.db[node.payload]["data"]["optimization_history"].values()) for node in nodes]
         client = self.db["ROOT"]["data"]
 
-        print("Downloading optimization information for", len( flatten_list( opt_ids, times=-1)))
+        if len(opt_ids) == 0:
+            print("No optimizations! For", nodes, ":")
+            print("No optimizations! IDs", nids, ":")
+            for node in nodes:
+                print(self.db[node.payload]["data"])
+
+        flat_ids = flatten_list( opt_ids, times=-1)
+        if len(flat_ids) == 0:
+            print("No optimizations to download?!?")
+            return
+        print("Downloading optimization information for", len(flat_ids))
         
         projection = None
-        flat_ids = ['QCP-' + str(x) for x in flatten_list( opt_ids, times=-1)]
+        flat_ids = ['QCP-' + str(x) for x in flat_ids]
         opt_map = self.batch_download(flat_ids, client.query_procedures, projection=projection)
         
         # add the constraint nodes
@@ -586,7 +660,9 @@ class QCATree( Tree.Tree):
         # nodes are the torsiondrives
         for node in nodes:
             obj = self.db[node.payload]
-            indices = obj["entry"].td_keywords.dihedrals[0]
+            entry = next(self.node_iter_to_root_single(node, select="Entry"))
+            entry = self.db[entry.payload]["data"]
+            indices = entry.td_keywords.dihedrals[0]
             for constraint, opts in obj["data"]["optimization_history"].items():
                 #val = eval(constraint)
 
@@ -594,13 +670,13 @@ class QCATree( Tree.Tree):
                         indices, 
                         eval( constraint)[0])
                 constraint_node = Node.Node( payload=pl , name="Constraint")
-                self.add(node.index, constraint_node)
+                constraint_node = self.add(node.index, constraint_node)
                 
                 for index in opts:
                     index = 'QCP-' + index
                     opt_node = Node.Node( name="Optimization", payload=index)
                     opt_nodes.append( opt_node)
-                    self.add(constraint_node.index, opt_node)
+                    opt_node = self.add(constraint_node.index, opt_node)
                     self.db[index] = {"data": opt_map[index]}
 
         self.branch_optimization_record( [x.index for x in opt_nodes], skel=skel)
@@ -657,7 +733,7 @@ class QCATree( Tree.Tree):
                     result_node = Node.Node(name="GradientStub", payload=index)
                     resutl_node = Node.CLEAN
                     result_nodes.append(result_node)
-                    self.add(node.index, result_node)
+                    result_node = self.add(node.index, result_node)
                     pl = {} if skel else result_map[index]
                     self.db[index] = {"data" : pl }
             else:
@@ -724,7 +800,7 @@ class QCATree( Tree.Tree):
 
                 mol_node = Node.Node( name=name, payload=index)
                 mol_node.state = state
-                self.add(node.index, mol_node)
+                mol_node = self.add(node.index, mol_node)
                 mol_nodes.append(mol_node)
 
                 if skel and (index not in self.db):
@@ -756,7 +832,7 @@ class QCATree( Tree.Tree):
                     if payload == ("QCM-" + pl["molecule"]):
                         hess_node = Node.Node( name="Hessian", payload=hess)
                         hess_node.state = Node.CLEAN
-                        self.add(mol.index, hess_node)
+                        hess_node = self.add(mol.index, hess_node)
                         self.db[hess] = { "data" : pl }
 
     def torsiondriverecord_minimum(self, tdr_nodes):
