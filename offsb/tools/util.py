@@ -1,20 +1,18 @@
+#!/usr/bin/env python3 
 
 import itertools
 
 def flatten_list(l, times=1):
-    #print("FLATTEN: list is", len(l))
     if times == 0: return l
     if times == -1:
-        if isinstance( l[0], list):
-            try:
-                ll = [a for b in l for a in b ]
-                return flatten_list(ll, times)
-            except TypeError:
-                return list() 
+        if isinstance(l[0], list):
+            ll = [a for b in l if hasattr(b,"__iter__") for a in b]
+            return flatten_list(ll, times)
         else:
             return l
     else:
-        return flatten_list( [a for b in l for a in b], times-1)
+        return flatten_list(
+                 [a for b in l if hasattr(b,"__iter__") for a in b], times-1)
 
 def argsort_labels(l):
     letter = [i[0] for i in l]
