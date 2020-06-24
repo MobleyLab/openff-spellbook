@@ -49,13 +49,30 @@ sets = [
     ( "TorsionDriveDataset", 'OpenFF Gen 2 Torsion Set 6 Supplemental'),
     ( "TorsionDriveDataset", 'OpenFF Gen 2 Torsion Set 6 Supplemental 2'),
 ]
+sets = [
+    ( 'OptimizationDataset', 'OpenFF Gen 2 Opt Set 1 Roche'),
+    ( 'OptimizationDataset', 'OpenFF Gen 2 Opt Set 2 Coverage'),
+    ( 'OptimizationDataset', 'OpenFF Gen 2 Opt Set 3 Pfizer Discrepancy'),
+    ( 'OptimizationDataset', 'OpenFF Gen 2 Opt Set 4 eMolecules Discrepancy'),
+    ( 'OptimizationDataset', 'OpenFF Gen 2 Opt Set 5 Bayer'),
+]
+#    ( 'OptimizationDataset', 'OpenFF NCI250K Boron 1'),
+
+def save( tree):
+    name = os.path.join(".", tree.name + ".p")
+    print("Saving: ", tree.ID, "as", name, end=" ... ")
+    tree.to_pickle( db=True, name=name)
+    print( "{:12.1f} MB".format(os.path.getsize( name)/1024**2))
+
 def load(sets, QCA=None):
 
     if QCA is None:
         QCA = qca.QCATree("QCA", root_payload=client, node_index=dict(), db=dict())
+    newdata = False
     for s in sets:
         if not any([s[1] == QCA[i].name for i in QCA.root().children]):
             print("Dataset", s, "not in local db, fetching...")
+            newdata = True
             ds = client.get_collection( *s)
             drop = ["Hessian"] if s[0] == "TorsionDriveDataset" else []
             #QCA.build_index( ds, drop=["Hessian"])
@@ -66,13 +83,11 @@ def load(sets, QCA=None):
         else:
             print("Dataset", s, "already indexed")
 
+    if newdata:
+        save(QCA)
+
     return QCA
 
-def save( tree):
-    name = os.path.join(".", tree.name + ".p")
-    print("Saving: ", tree.ID, "as", name, end=" ... ")
-    tree.to_pickle( db=True, name=name)
-    print( "{:12.1f} MB".format(os.path.getsize( name)/1024**2))
 import pickle
 QCA = None
 if os.path.exists('QCA.p'):
@@ -80,7 +95,6 @@ if os.path.exists('QCA.p'):
         QCA = pickle.load(fid)
 QCA = load(sets, QCA=QCA)
 #QCA.cache_optimization_minimum_molecules()
-#save(QCA)
 #ds_nodes = [ QCA[index] for index in QCA.root().children]
 #entries = list(QCA.iter_entry( ds_nodes))
 #}}}
@@ -136,6 +150,12 @@ for ds_id in QCA.root().children:
 
                         if "RuntimeError: Unsuccessful run. Possibly -D variant not available in dftd3 version." in err['error_message']:
                             errtype="dftd3variant"
+
+                        if "Could not converge SCF iterations" in err['error_message']:
+                            errtype="scfconv"
+
+                        if "distributed.scheduler.KilledWorker" in err['error_message']:
+                            errtype="needsrestart-daskkilled"
 
                         for line in err['error_message'].split('\n')[::-1]:
                             if len(line) > 0:
