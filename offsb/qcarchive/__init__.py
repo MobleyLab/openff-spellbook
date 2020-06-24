@@ -25,7 +25,7 @@ def qcmol_to_xyz( qcmol, atom_map=None, fnm=None, fd=None, comment=""):
             myfd.write( "".join( header))
             [ myfd.write( line) for line in xyzstr ]
     if fd:
-        print("HEADER", header)
+        #print("HEADER", header)
         fd.write( "".join( header))
         [ fd.write( line) for line in xyzstr ]
     return header + xyzstr

@@ -48,8 +48,6 @@ sets = [
     ( "TorsionDriveDataset", 'OpenFF Gen 2 Torsion Set 5 Bayer 2'),
     ( "TorsionDriveDataset", 'OpenFF Gen 2 Torsion Set 6 Supplemental'),
     ( "TorsionDriveDataset", 'OpenFF Gen 2 Torsion Set 6 Supplemental 2'),
-]
-sets = [
     ( 'OptimizationDataset', 'OpenFF Gen 2 Opt Set 1 Roche'),
     ( 'OptimizationDataset', 'OpenFF Gen 2 Opt Set 2 Coverage'),
     ( 'OptimizationDataset', 'OpenFF Gen 2 Opt Set 3 Pfizer Discrepancy'),
@@ -138,24 +136,24 @@ for ds_id in QCA.root().children:
                         errmsg += "############\n"
                         if "RuntimeError: Not bracketed" in err['error_message']:
                             errtype="bracketed"
-
-                        if "Cannot continue a constrained optimization; please implement constrained optimization in Cartesian coordinates" in err['error_message']:
+                        elif "Cannot continue a constrained optimization; please implement constrained optimization in Cartesian coordinates" in err['error_message']:
                             errtype="cartconstr"
-
-                        if "numpy.linalg.LinAlgError: Eigenvalues did not converge" in err['error_message']:
+                        elif "numpy.linalg.LinAlgError: Eigenvalues did not converge" in err['error_message']:
                             errtype="numpy-eigh"
-
-                        if "geometric.errors.GeomOptNotConvergedError: Optimizer.optimizeGeometry() failed to converge." in err['error_message']:
+                        elif "geometric.errors.GeomOptNotConvergedError: Optimizer.optimizeGeometry() failed to converge." in err['error_message']:
                             errtype="optconverge"
-
-                        if "RuntimeError: Unsuccessful run. Possibly -D variant not available in dftd3 version." in err['error_message']:
+                        elif "RuntimeError: Unsuccessful run. Possibly -D variant not available in dftd3 version." in err['error_message']:
                             errtype="dftd3variant"
-
-                        if "Could not converge SCF iterations" in err['error_message']:
+                        elif "Could not converge SCF iterations" in err['error_message']:
                             errtype="scfconv"
-
-                        if "distributed.scheduler.KilledWorker" in err['error_message']:
+                        elif "distributed.scheduler.KilledWorker" in err['error_message']:
                             errtype="needsrestart-daskkilled"
+                        elif "concurrent.futures.process.BrokenProcessPool" in err['error_message']:
+                            errtype="needsrestart-brokenpool"
+                        elif len(err['error_message'].strip().strip('\n')) == 0:
+                            errtype="emptyerror"
+                        else:
+                            errtype="nocategory"
 
                         for line in err['error_message'].split('\n')[::-1]:
                             if len(line) > 0:
