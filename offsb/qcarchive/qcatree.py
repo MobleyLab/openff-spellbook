@@ -674,6 +674,13 @@ class QCATree( Tree.Tree):
                 if name in self.drop:
                     return
 
+                # if the spec is not here, then somehow data was never 
+                # generated. This is not a good thing.
+                if spec not in records[rec].object_map:
+                    print("Spec", spec, "for entry", rec, "missing!")
+                    continue
+
+
                 for proc in procedures:
                     if proc != "QCP-" + records[rec].object_map[spec]:
                         continue
