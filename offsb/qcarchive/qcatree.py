@@ -782,7 +782,10 @@ class QCATree( Tree.Tree):
 
             obj = self.db[node.payload]
             scans = obj["data"]["keywords"].scans
-            assert len(scans) == 1
+            if len(scans) == 0:
+                print("This grid opt has no scans:", node.payload)
+            elif len(scans) > 1:
+                print("This grid opt multiple scans!:", node.payload)
             scan = scans[0].__dict__
             for  constraint, opts in obj["data"]["grid_optimizations"].items():
                 #TODO need to cross ref the index to the actual constraint val
