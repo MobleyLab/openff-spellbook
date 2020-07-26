@@ -4,6 +4,8 @@ del get_versions
 
 from ..tools import const
 
+from .qcatree import QCATree
+
 def qcmol_to_xyz( qcmol, atom_map=None, fnm=None, fd=None, comment=""):
     syms = qcmol["symbols"]
     xyz  = qcmol["geometry"]

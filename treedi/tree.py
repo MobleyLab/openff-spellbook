@@ -31,10 +31,10 @@ def link_iter_to_root( t):
 
 class Tree( ABC):
     index=0
-    """ Basically just a structre that holds an index for fast lookups.
-        Also holds associations for links. Linking will create a new tree with
-        empty payloads; will keep IDs
-
+    """ 
+    A structure that holds an index for fast lookups.
+    Also holds associations for links. Linking will create a new tree with
+    empty payloads; will keep IDs
 
     """
     def __init__(self, name, root_payload=None, node_index=None, 

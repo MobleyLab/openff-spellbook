@@ -10,11 +10,6 @@ import treedi.node as Node
 
 from .qca_comparisons import match_canonical_isomeric_explicit_hydrogen_smiles
 
-def filter_entry(obj):
-    if obj.payload == {} or obj.payload is None: 
-        return False
-    return "entry" in obj.payload
-
 def wrap_fn(fn, ids, i, j, **kwargs):
     out_str = kwargs['out_str']
     kwargs.pop('out_str')
@@ -39,11 +34,25 @@ def wrap_fn_hessian(fn, i, j, **kwargs):
 
 class QCATree( Tree.Tree):
 
-    def __init__( self, name, root_payload=None, node_index=None, db=None, \
+    def __init__( self, obj, root_payload=None, node_index=None, db=None, \
                   payload=None):
         print("Building QCATree")
-        super().__init__( name, root_payload=root_payload, \
-                          node_index=node_index, db=db, payload=payload)
+        if isinstance(obj, str):
+            super().__init__( obj, root_payload=root_payload, \
+                              node_index=node_index, db=db, payload=payload)
+
+    def from_QCATree(self, name, obj):
+        if isinstance(obj, type(self)):
+            rpl = obj.db["ROOT"]
+            nodes = obj.node_index.copy()
+            db = obj.db.copy()
+            pl = obj.root().payload
+            newtree = QCATree(name, root_payload=rpl, node_index=nodes,
+                db=db, payload=pl)
+            return newtree
+        else:
+            raise Exception("Tried to call from_QCATree(obj) and obj is not a QCATree")
+
 
     def vtable( self, obj):
         """
@@ -88,7 +97,6 @@ class QCATree( Tree.Tree):
         self.isolate()
         return pickle.dumps( self)
 
-    
 
     def combine_by_entry( self, 
             fn=match_canonical_isomeric_explicit_hydrogen_smiles,
@@ -101,7 +109,7 @@ class QCATree( Tree.Tree):
         new_nodes = []
         
         if targets is None:
-            entries = list(self.iter_entry())
+            entries = list(self.node_iter_depth_first(self.root(), select="Entry"))
         elif hasattr( targets, "__iter__"):
             entries = list(targets)
         else:
@@ -114,7 +122,7 @@ class QCATree( Tree.Tree):
             if i in used:
                 continue
             ref = entries[i].copy()
-            ref_obj = self.db[ ref.payload]['entry']
+            ref_obj = self.db[ ref.payload]['data']
             used.add( i)
 
             node = Node.Node(name="Folder", index="", payload=repr( fn))
@@ -122,7 +130,7 @@ class QCATree( Tree.Tree):
 
             for j in range( i+1, len( entries)):
                 entry = entries[j].copy()
-                entry_obj = self.db[ entry.payload]['entry']
+                entry_obj = self.db[ entry.payload]['data']
                 if fn( ref_obj, entry_obj):
                     node.add(entry)
                     used.add(j)
@@ -207,12 +215,12 @@ class QCATree( Tree.Tree):
         elif not hasattr( nodes, "__iter__"):
             nodes = [nodes]
         for top_node in nodes:
-            for node in fn( self, top_node):
-                if node.payload not in self.db:
-                    continue
-                obj = self.db[node.payload]
-                if "entry" in obj:
-                    yield node
+            yield from fn( self, top_node, select="Entry")
+                # if node.payload not in self.db:
+                #     continue
+                # obj = self.db[node.payload]
+                # if "entry" in obj:
+                #     yield node
 
     def iter_entry( self, select=None):
         yield from self.node_iter_entry( \
@@ -234,7 +242,7 @@ class QCATree( Tree.Tree):
         if nodes is None:
             nodes = self.node_iter_dive(self.root(), select="Optimization")
         for opt_node in nodes:
-            opt = QCA[opt_node.payload]
+            opt = self[opt_node.payload]
             final_mol_id = opt["data"]["final_molecule"]
 
             if not final_mol_id is None:
