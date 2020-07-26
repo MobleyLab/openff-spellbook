@@ -9,7 +9,7 @@ import pickle
 
 class QCArchiveSpellBook():
 
-    obpenff_qcarchive_datasets_default = [
+    openff_qcarchive_datasets_default = [
         ('GridOptimizationDataset', 'OpenFF Trivalent Nitrogen Set 1'),
         ('GridOptimizationDataset', 'OpenFF Trivalent Nitrogen Set 2'),
         ('GridOptimizationDataset', 'OpenFF Trivalent Nitrogen Set 3'),
