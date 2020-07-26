@@ -35,21 +35,18 @@ def qca_query(oid, mid):
 
     return opt,mid
 
-def run(js, fnm=None):
-    import geometric
-    out = geometric.run_json.geometric_run_json(js)
-    if fnm is None:
-        return json.dumps(out, indent=2)
-    else:
-        with open(fnm,'w') as fid:
-            json.dump(out, fid, indent=2)
-        return None
 
-def qca_run_geometric_opt(oid, mid, fnm=None):
+def qca_generate_input(oid, mid, memory="2GB", nthreads=1):
     opt, mol = qca_query(oid, mid)
     js = generate_json(opt, mol)
-    ret = run(js, fnm)
-    return ret
+    js['memory'] = memory
+    js['nthreads'] = nthreads
+    return js
+
+def qca_run_geometric_opt(js):
+    import geometric
+    out = geometric.run_json.geometric_run_json(js)
+    return out 
 
 def main():
     import argparse
@@ -58,11 +55,25 @@ def main():
     parser.add_argument('optimization_id', help='QCA ID of the optimization to run')
     parser.add_argument('molecule_id', help='QCA ID of the molecule to use')
     parser.add_argument('-o', '--out_json', default=None, help='Output json file name')
+    parser.add_argument('-i', '--inputs-only', action="store_true",
+        help='just generate input json; do not run')
+    parser.add_argument('-m', '--memory', type=str, default="2GB", help="amount of memory to give to psi4 eg '10GB'")
+    parser.add_argument('-n', '--nthreads', type=int, default=1, help="number of processors to give to psi4")
+
     args = parser.parse_args()
 
-    ret = qca_run_geometric_opt(args.optimization_id, args.molecule_id, args.out_json)
-    if not ret is None:
-        print(ret)
+    js = qca_generate_input(args.optimization_id, args.molecule_id, args.memory, args.nthreads)
+
+    if args.inputs_only:
+        ret = js
+    else:
+        ret = qca_run_geometric_opt(js)
+    if args.out_json is None:
+        if len(ret) > 0:
+            print(json.dumps(ret, indent=2))
+    else:
+        with open(args.out_json,'w') as fid:
+            json.dump(ret, fid, indent=2)
 
 if __name__ == '__main__':
     main()
