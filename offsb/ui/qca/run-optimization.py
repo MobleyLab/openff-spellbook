@@ -12,7 +12,7 @@ def generate_json(opt, mol):
     js["input_specification"] = opt.qc_spec.dict()
     js["input_specification"]['keywords'] = {
         "maxiter": 200, 
-        "scf_properties": [
+        "properties": [
             "dipole", "quadrupole", "wiberg_lowdin_indices", "mayer_indices"
         ]
     }
