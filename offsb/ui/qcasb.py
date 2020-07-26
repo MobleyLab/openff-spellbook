@@ -9,7 +9,7 @@ import pickle
 
 class QCArchiveSpellBook():
 
-    openff_qcarchive_datasets_default = [
+    obpenff_qcarchive_datasets_default = [
         ('GridOptimizationDataset', 'OpenFF Trivalent Nitrogen Set 1'),
         ('GridOptimizationDataset', 'OpenFF Trivalent Nitrogen Set 2'),
         ('GridOptimizationDataset', 'OpenFF Trivalent Nitrogen Set 3'),
@@ -133,7 +133,7 @@ class QCArchiveSpellBook():
             else:
                 print("Collection molecules across datasets...")
                 self.folder_cache['per_molecule'] = [x for x in self.QCA.combine_by_entry()]
-                with open(os.path.join(self.cache_dir, 'per_molecule.p'), 'w') as fid:
+                with open(os.path.join(self.cache_dir, 'per_molecule.p'), 'wb') as fid:
                     pickle.dump(self.folder_cache['per_molecule'], fid)
         dat = {}
         for folder in self.folder_cache['per_molecule']:
