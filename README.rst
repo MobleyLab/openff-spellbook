@@ -34,8 +34,22 @@ Bottled functionality resides in the `ui` submodule. So far:
       --full-report
     
     $ python3 -m offsb.ui.qca.run-optimization
-    usage: run-optimization.py [-h] [-o OUT_JSON] optimization_id molecule_id
-    run-optimization.py: error: the following arguments are required: optimization_id, molecule_id
+    usage: run-optimization.py [-h] [-o OUT_JSON] [-i] [-m MEMORY] [-n NTHREADS]
+                               optimization_id molecule_id
+
+    positional arguments:
+      optimization_id       QCA ID of the optimization to run
+      molecule_id           QCA ID of the molecule to use
+
+    optional arguments:
+      -h, --help            show this help message and exit
+      -o OUT_JSON, --out_json OUT_JSON
+                            Output json file name
+      -i, --inputs-only     just generate input json; do not run
+      -m MEMORY, --memory MEMORY
+                            amount of memory to give to psi4 eg '10GB'
+      -n NTHREADS, --nthreads NTHREADS
+                            number of processors to give to psi4
     
     $ python3 -m offsb.ui.qca.energy-per-molecule
     usage: energy-per-molecule.py [-h] [--report-out REPORT_OUT]
