@@ -18,8 +18,9 @@ Installation
 
 Available on PyPi, so a pip install should work:
 
-.. code-block::
-    pip install openff-spellbook
+.. code-block:: bash
+
+    $ pip install openff-spellbook
 
 Preferably in a preconfigured virtual environment e.g. conda. Append --user if
 such an environment is not being used.
