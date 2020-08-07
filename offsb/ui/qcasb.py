@@ -95,7 +95,7 @@ class QCArchiveSpellBook():
         if load_all:
             sets = sets.copy()
             for index, row in client.list_collections().iterrows():
-                if "OpenFF" in index[1]:
+                if "OpenFF" in index[1] and index[0] != "Dataset":
                     sets.append(index)
 
         for s in sets:
