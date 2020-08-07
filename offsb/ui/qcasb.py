@@ -14,6 +14,9 @@ class QCArchiveSpellBook():
         ('OptimizationDataset', 'Kinase Inhibitors: WBO Distributions'),
         ('OptimizationDataset', 'Pfizer Discrepancy Optimization Dataset 1')
     ]
+    openff_qcarchive_datasets_skip = [
+        ('OptimizationDataset', 'OpenFF Ehrman Informative Optimization v0.2')
+    ]
     openff_qcarchive_datasets_default = [
         ('GridOptimizationDataset', 'OpenFF Trivalent Nitrogen Set 1'),
         ('GridOptimizationDataset', 'OpenFF Trivalent Nitrogen Set 2'),
@@ -95,6 +98,9 @@ class QCArchiveSpellBook():
         if load_all:
             sets = sets.copy()
             for index, row in client.list_collections().iterrows():
+                for skip_set in self.openff_qcarchive_datasets_skip:
+                    if skip_set == index:
+                        continue
                 if "OpenFF" in index[1] and index[0] != "Dataset":
                     sets.append(index)
 
