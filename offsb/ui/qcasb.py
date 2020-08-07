@@ -9,6 +9,11 @@ import pickle
 
 class QCArchiveSpellBook():
 
+    openff_qcarchive_datasets_bad_name = [
+        ('OptimizationDataset', 'FDA Optimization Dataset 1'),
+        ('OptimizationDataset', 'Kinase Inhibitors: WBO Distributions'),
+        ('OptimizationDataset', 'Pfizer Discrepancy Optimization Dataset 1')
+    ]
     openff_qcarchive_datasets_default = [
         ('GridOptimizationDataset', 'OpenFF Trivalent Nitrogen Set 1'),
         ('GridOptimizationDataset', 'OpenFF Trivalent Nitrogen Set 2'),
@@ -79,12 +84,20 @@ class QCArchiveSpellBook():
         tree.to_pickle( db=True, name=name)
         print( "{:12.1f} MB".format(os.path.getsize( name)/1024**2))
 
-    def load(self, sets):
+    def load(self, sets, load_all=False):
 
         client = ptl.FractalClient()
         if self.QCA is None:
             self.QCA = qca.QCATree("QCA", root_payload=client, node_index=dict(), db=dict())
         newdata = False
+
+        # take any dataset with OpenFF in the dataset name
+        if load_all:
+            sets = sets.copy()
+            for index, row in client.list_collections().iterrows():
+                if "OpenFF" in index[1]:
+                    sets.append(index)
+
         for s in sets:
             if not any([s[1] == self.QCA[i].name for i in self.QCA.root().children]):
                 print("Dataset", s, "not in local db, fetching...")
@@ -119,7 +132,11 @@ class QCArchiveSpellBook():
             if os.path.exists(fname):
                 with open(fname, 'rb') as fid:
                     self.QCA = pickle.load(fid)
-            self.load(self.openff_qcarchive_datasets_default)
+
+            
+            aux_sets = self.openff_qcarchive_datasets_bad_name
+            
+            self.load(aux_sets, load_all=True)
         self.folder_cache = {}
 
     def energy_minimum_per_molecule(self):
