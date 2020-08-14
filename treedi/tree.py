@@ -1,4 +1,3 @@
-
 from .node import *
 import collections
 import numpy as np
@@ -7,6 +6,8 @@ import os
 import copy
 import warnings
 import pprint
+from treedi.node  import Node
+from treedi.node import DIRTY
 
 def link_iter_depth_first( t):
     for c in t.link.values():
@@ -105,8 +106,8 @@ class Tree( ABC):
 
     def set_root(self, root):
         self.node_index = {node.index : node for node in self.node_iter_depth_first( root)}
-        self.n_levels = max( [node_level( node) for node in self.node_index.values()])
-        self.n_nodes = node_descendents( root) + 1
+        # self.n_levels = max( [node_level( node) for node in self.node_index.values()])
+        # self.n_nodes = node_descendents( root) + 1
         self.root = root
         self.root.tree = self.name
 
@@ -310,7 +311,7 @@ class PartitionTree( Tree):
 
         #        node.add( v)
         super().__init__( node_index=source_tree.node_index, name=name)
-        [self.register_modified( node) for node in self.node_index.values()]
+        #[self.register_modified(node) for node in self.node_index.values()]
         #source_tree.link_tree(self)
     def to_pickle( self, name=None, index=False, db=True):
         import pickle

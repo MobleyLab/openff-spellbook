@@ -43,21 +43,34 @@ def sort_mol_by_scan(nodes):
 
 key = 'canonical_isomeric_explicit_hydrogen_smiles'
 key_mapped = 'canonical_isomeric_explicit_hydrogen_mapped_smiles'
-comment_str = "ENE: {:11.8e} SMILES: {:s}"
+comment_str = "ENE: {:11.8e} {:s} SMILES: {:s}"
 
 entries = list(QCA.iter_entry())
 entries_n = len(entries)
+spec = "openff-1.0.0"
+
+tds = []
+for i, entry_node in enumerate( entries, 1):
+    spec = [QCA[x] for x in entry_node.children if QCA[x].payload == "QCS-openff-1.0.0"][0] 
+    tds.extend([QCA[x] for x in spec.children])
+
+QCA.cache_torsiondriverecord_minimum_molecules(tds)
 
 for i, entry_node in enumerate( entries, 1):
 
-    nodes = list( QCA.node_iter_optimization_minimum( entry_node))
-    print(len(nodes))
+    node = [QCA[x] for x in entry_node.children if QCA[x].payload == "QCS-openff-1.0.0"][0] 
+
+    td = list(QCA.node_iter_depth_first(node, select="TorsionDrive"))[0]
+    nodes = list( QCA.node_iter_optimization_minimum([td]))
+    if len(nodes) == 0:
+        continue
+    constr = str(next(QCA.node_iter_depth_first([td], select="Constraint")).payload[1])
     ret, n = sort_mol_by_scan( nodes)
     if ret == 0:
         nodes = n
-    print( i, "/", entries_n, entry_node.payload, "Frames:", len(nodes))
+    print( i, "/", entries_n, td.payload, entry_node.payload, "Frames:", len(nodes))
     
-    entry = QCA.db[entry_node.payload]["entry"]
+    entry = QCA.db[entry_node.payload]['data']
     mol_name = entry.name
     smiles = entry.attributes[key]
     smiles_mapped = entry.attributes[key_mapped]
@@ -78,13 +91,14 @@ for i, entry_node in enumerate( entries, 1):
         except TypeError:
             continue
 
-        comment = comment_str.format(ene, smiles)
+        comment = comment_str.format(ene, constr, smiles)
         qcmol = QCA.db[mol_node.payload]["data"]
-        frame = offsb.qcarchive.qcmol_to_xyz(qcmol, 
-                atom_map=atom_map, comment=comment)
+        if "symbols" not in qcmol:
+            continue
+        frame = offsb.qcarchive.qcmol_to_xyz(qcmol, comment=comment)
         mol_xyz_frames.append(frame)
 
-    with open( entry_node.payload + ".scan_trj.xyz", 'w') as fd:
+    with open( "td." + td.payload + ".scan_trj.xyz", 'w') as fd:
         [ fd.write( line) for lines in mol_xyz_frames for line in lines]
 
 

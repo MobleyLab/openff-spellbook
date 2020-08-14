@@ -7,6 +7,11 @@ import os
 import sys
 import pickle
 
+def load_dataset_input(fnm):
+    datasets = [tuple([line.split()[0]," ".join(line.strip('\n').split()[1:])])
+        for line in open(fnm).readlines()]
+    return datasets
+
 class QCArchiveSpellBook():
 
     openff_qcarchive_datasets_bad_name = [
@@ -15,7 +20,7 @@ class QCArchiveSpellBook():
         ('OptimizationDataset', 'Pfizer Discrepancy Optimization Dataset 1')
     ]
     openff_qcarchive_datasets_skip = [
-        ('OptimizationDataset', 'OpenFF Ehrman Informative Optimization v0.2')
+        ('OptimizationDataset', 'OpenFF Ehrman Informative Optimization v0.1')
     ]
     openff_qcarchive_datasets_default = [
         ('GridOptimizationDataset', 'OpenFF Trivalent Nitrogen Set 1'),
@@ -43,11 +48,6 @@ class QCArchiveSpellBook():
         ("TorsionDriveDataset", 'OpenFF Primary TorsionDrive Benchmark 1'),           
         ("TorsionDriveDataset", 'OpenFF Substituted Phenyl Set 1'),                  
         ("TorsionDriveDataset", 'OpenFF Rowley Biaryl v1.0'),                  
-        ('OptimizationDataset', 'OpenFF Gen 2 Opt Set 1 Roche'),
-        ('OptimizationDataset', 'OpenFF Gen 2 Opt Set 2 Coverage'),
-        ('OptimizationDataset', 'OpenFF Gen 2 Opt Set 3 Pfizer Discrepancy'),
-        ('OptimizationDataset', 'OpenFF Gen 2 Opt Set 4 eMolecules Discrepancy'),
-        ('OptimizationDataset', 'OpenFF Gen 2 Opt Set 5 Bayer'),
         ('OptimizationDataset', 'FDA Optimization Dataset 1'),
         ('OptimizationDataset', 'Kinase Inhibitors: WBO Distributions'),
         ('OptimizationDataset', 'OpenFF Discrepancy Benchmark 1'),
@@ -94,27 +94,38 @@ class QCArchiveSpellBook():
             self.QCA = qca.QCATree("QCA", root_payload=client, node_index=dict(), db=dict())
         newdata = False
 
+        print("Aux sets to load:")
+        print(sets)
+
         # take any dataset with OpenFF in the dataset name
         if load_all:
             sets = sets.copy()
             for index, row in client.list_collections().iterrows():
                 for skip_set in self.openff_qcarchive_datasets_skip:
-                    if skip_set == index:
+                    if skip_set[1] == index[1]:
+                        print("Skipping", index)
                         continue
                 if "OpenFF" in index[1] and index[0] != "Dataset":
                     sets.append(index)
 
         for s in sets:
-            if not any([s[1] == self.QCA[i].name for i in self.QCA.root().children]):
+            name = s[1].split("/")
+            specs = ['default'] if len(name) == 1 else name[1].split()
+            specs = [x.strip() for x in specs]
+            print("Input has specs", specs)
+            name = name[0].rstrip().lstrip()
+            if not any([name == self.QCA[i].name for i in self.QCA.root().children]):
                 print("Dataset", s, "not in local db, fetching...")
                 newdata = True
-                ds = client.get_collection( *s)
+                ds = client.get_collection(s[0], name)
                 drop = ["Hessian"] if (s[0] == "TorsionDriveDataset" or self.drop_hessians) else []
                 #QCA.build_index( ds, drop=["Hessian"])
                 #drop=[]
+
                 if self.drop_intermediates:
                     drop.append("Intermediates")
-                self.QCA.build_index(ds, drop=drop, keep_specs=["default"],
+
+                self.QCA.build_index(ds, drop=drop, keep_specs=specs,
                     start=0, limit=0)
             else:
                 print("Dataset", s, "already indexed")
@@ -123,7 +134,7 @@ class QCArchiveSpellBook():
             self.save(self.QCA)
 
 
-    def __init__(self, QCA=None):
+    def __init__(self, datasets=None, QCA=None):
 
         import pickle
         self.QCA = None
@@ -141,8 +152,12 @@ class QCArchiveSpellBook():
 
             
             aux_sets = self.openff_qcarchive_datasets_bad_name
-            
-            self.load(aux_sets, load_all=True)
+            load_all=True
+            if datasets is not None:
+                aux_sets = datasets
+                load_all = False
+
+            self.load(aux_sets, load_all=load_all)
         self.folder_cache = {}
 
     def energy_minimum_per_molecule(self):
@@ -189,131 +204,132 @@ class QCArchiveSpellBook():
         QCA = self.QCA
         for ds_id in QCA.root().children:
             ds_node = QCA[ds_id]
-            default = [n for n in QCA.node_iter_depth_first(ds_node) if "QCS-default" in n.payload]
-            mindepth = QCA.node_depth(default[0])
-            tdi = 0
-            fid.write("==== DATASET ==== {}\n".format(ds_node.name))
-            for node in QCA.node_iter_dive(default):
-                i = QCA.node_depth(node) - mindepth+1
-                status=""
-                statbar= "    "
-                errmsg = ""
-                hasstat = False
-                try:
-                    hasstat = "status" in QCA.db[node.payload]["data"]
-                except Exception:
-                    pass
-                if hasstat:
-                    status = QCA.db[node.payload]["data"]["status"][:]
-                    if status != "COMPLETE" and node.name == "Optimization":
-                        try:
-                            statbar = "----"
-                            qcp = QCA.db[node.payload]['data']
-                            client = qcp['client']
-                            # print("error", qcp['error'], qcp['error'] is None)
+            specs = [n for n in QCA.node_iter_depth_first(ds_node) if "QCS" in n.payload]
+            for spec in specs:
+                mindepth = QCA.node_depth(spec)
+                tdi = 0
+                fid.write("==== DATASET ==== {}\n".format(ds_node.name))
+                for node in QCA.node_iter_dive(spec):
+                    i = QCA.node_depth(node) - mindepth+1
+                    status=""
+                    statbar= "    "
+                    errmsg = ""
+                    hasstat = False
+                    try:
+                        hasstat = "status" in QCA.db[node.payload]["data"]
+                    except Exception:
+                        pass
+                    if hasstat:
+                        status = QCA.db[node.payload]["data"]["status"][:]
+                        if status != "COMPLETE" and node.name == "Optimization":
+                            try:
+                                statbar = "----"
+                                qcp = QCA.db[node.payload]['data']
+                                client = qcp['client']
+                                # print("error", qcp['error'], qcp['error'] is None)
 
-                            errtype = ""
-                            xyzerrmsg = ""
-                            if not (qcp['error'] is None):
-                                err = list(client.query_kvstore(int(qcp['error'])).values())[0]
-                                errmsg += "####ERROR####\n"
-                                errmsg += "Error type: " + err['error_type'] + "\n"
-                                errmsg += "Error:\n" + err['error_message']
-                                errmsg += "############\n"
-                                if "RuntimeError: Not bracketed" in err['error_message']:
-                                    errtype="bracketed"
-                                elif "Cannot continue a constrained optimization; please implement constrained optimization in Cartesian coordinates" in err['error_message']:
-                                    errtype="cartconstr"
-                                elif "numpy.linalg.LinAlgError: Eigenvalues did not converge" in err['error_message']:
-                                    errtype="numpy-eigh"
-                                elif "geometric.errors.GeomOptNotConvergedError: Optimizer.optimizeGeometry() failed to converge." in err['error_message']:
-                                    errtype="optconverge"
-                                elif "RuntimeError: Unsuccessful run. Possibly -D variant not available in dftd3 version." in err['error_message']:
-                                    errtype="dftd3variant"
-                                elif "Could not converge SCF iterations" in err['error_message']:
-                                    errtype="scfconv"
-                                elif "distributed.scheduler.KilledWorker" in err['error_message']:
-                                    errtype="needsrestart-daskkilled"
-                                elif "concurrent.futures.process.BrokenProcessPool" in err['error_message']:
-                                    errtype="needsrestart-brokenpool"
-                                elif len(err['error_message'].strip().strip('\n')) == 0:
-                                    errtype="emptyerror"
-                                else:
-                                    errtype="nocategory"
-
-                                for line in err['error_message'].split('\n')[::-1]:
-                                    if len(line) > 0:
-                                        xyzerrmsg = line
-                                        break
-
-                            elif status == "ERROR":
-                                errmsg += "####FATAL####\n"
-                                errmsg += "Job errored and no error on record. Input likely bogus; check your settings\n"
-                                errmsg += "############\n"
-                                errtype="bogus"
-                                xyzerrmsg="Job errored and no error on record. Input likely bogus; check your settings"
-                                
-                            if len(errtype) > 0: 
-                                traj = list(QCA.node_iter_depth_first(node, select="Molecule"))
-                                metadata = ""
-                                tdids = [n.payload for n in QCA.node_iter_to_root(node, select="TorsionDrive")]
-
-                                if len(tdids) > 0:
-                                    metadata += 'TdIDs ' + '.'.join(tdids) + ' '
-
-                                contrs = [str(n.payload) for n in QCA.node_iter_to_root(node, select="Constraint")]
-                                if len(contrs) > 0:
-                                    metadata += 'Constraints ' + '.'.join(contrs) + ' '
-
-                                tdname = '.'.join(tdids)
-                                if len(tdname) > 0:
-                                    tdname += '.'
-                                if len(traj) > 0:
-                                    fname ='geometric.'+errtype+'.traj.' + tdname + node.payload + '.' + traj[-1].payload + '.xyz'
-                                    # print("Trajectory found... saving", fname)
-                                    mol = QCA.db[traj[-1].payload]['data']
-                                    with open(fname, 'w') as xyzfid:
-                                        _ = offsb.qcarchive.qcmol_to_xyz(mol, fd=xyzfid, comment=metadata+"OptID "+ node.payload + " MoleculeID " + traj[-1].payload + " Error= " + xyzerrmsg)
-                                else:
-                                    mol_id = 'QCM-'+qcp['initial_molecule']
-                                    fname ='geometric.'+errtype+'.initial.'+ tdname + node.payload + '.' + mol_id + '.xyz'
-                                    # print("Trajectory not found... saving input molecule", fname)
-                                    mol = QCA.db[mol_id]['data']
-                                    if 'geometry' in mol and 'symbols' in mol:
-                                        with open(fname, 'w') as xyzfid:
-                                            _ = offsb.qcarchive.qcmol_to_xyz(mol, fd=xyzfid, comment=metadata+"OptID "+ node.payload + " MoleculeID " + mol_id + " Error= " + xyzerrmsg)
+                                errtype = ""
+                                xyzerrmsg = ""
+                                if not (qcp['error'] is None):
+                                    err = list(client.query_kvstore(int(qcp['error'])).values())[0]
+                                    errmsg += "####ERROR####\n"
+                                    errmsg += "Error type: " + err['error_type'] + "\n"
+                                    errmsg += "Error:\n" + err['error_message']
+                                    errmsg += "############\n"
+                                    if "RuntimeError: Not bracketed" in err['error_message']:
+                                        errtype="bracketed"
+                                    elif "Cannot continue a constrained optimization; please implement constrained optimization in Cartesian coordinates" in err['error_message']:
+                                        errtype="cartconstr"
+                                    elif "numpy.linalg.LinAlgError: Eigenvalues did not converge" in err['error_message']:
+                                        errtype="numpy-eigh"
+                                    elif "geometric.errors.GeomOptNotConvergedError: Optimizer.optimizeGeometry() failed to converge." in err['error_message']:
+                                        errtype="optconverge"
+                                    elif "RuntimeError: Unsuccessful run. Possibly -D variant not available in dftd3 version." in err['error_message']:
+                                        errtype="dftd3variant"
+                                    elif "Could not converge SCF iterations" in err['error_message']:
+                                        errtype="scfconv"
+                                    elif "distributed.scheduler.KilledWorker" in err['error_message']:
+                                        errtype="needsrestart-daskkilled"
+                                    elif "concurrent.futures.process.BrokenProcessPool" in err['error_message']:
+                                        errtype="needsrestart-brokenpool"
+                                    elif len(err['error_message'].strip().strip('\n')) == 0:
+                                        errtype="emptyerror"
                                     else:
-                                        # print("Initial molecule missing!")
-                                        errmsg += "XXXXISSUEXXXX\n"
-                                        errmsg += "Initial molecule was missing!\n"
-                                        errmsg += "xxxxxxxxxxxxx\n"
-                            if not (qcp['stdout'] is None):
-                                msg = list(client.query_kvstore(int(qcp['stdout'])).values())[0]
-                                errmsg += "xxxxISSUExxxx\n"
-                                errmsg += "Status was not complete; stdout is:\n"
-                                errmsg += msg
-                                errmsg += "xxxxxxxxxxxxx\n"
-                            if not (qcp['stderr'] is None):
-                                msg = list(client.query_kvstore(int(qcp['stderr'])).values())[0]
-                                errmsg += "####ISSUE####\n"
-                                errmsg += "Status was not complete; stderr is:\n"
-                                errmsg += msg
-                                errmsg += "#############\n"
-                        except Exception as e:
-                            fid.write("Internal issue:\n" + str(e) + '\n')
+                                        errtype="nocategory"
 
-                    if status != "COMPLETE" and node.name == "TorsionDrive":
-                        statbar = "XXXX"
-                tderror = False
-                if node.name == "TorsionDrive" and status != "COMPLETE":
-                    tdi += 1
-                    tderror = True
-                if full_report or (len(errmsg) > 0 or tderror):
-                    out_str = "{:2d} {} {} {}\n".format(tdi,statbar*i, " ".join([str(node.index),str(node.name),  str(node.payload)]), status)
-                    fid.write(out_str)
-                    if errmsg != "":
-                        err_str = "\n{}\n".format(errmsg)
-                        fid.write(err_str)
+                                    for line in err['error_message'].split('\n')[::-1]:
+                                        if len(line) > 0:
+                                            xyzerrmsg = line
+                                            break
+
+                                elif status == "ERROR":
+                                    errmsg += "####FATAL####\n"
+                                    errmsg += "Job errored and no error on record. Input likely bogus; check your settings\n"
+                                    errmsg += "############\n"
+                                    errtype="bogus"
+                                    xyzerrmsg="Job errored and no error on record. Input likely bogus; check your settings"
+                                    
+                                if len(errtype) > 0: 
+                                    traj = list(QCA.node_iter_depth_first(node, select="Molecule"))
+                                    metadata = ""
+                                    tdids = [n.payload for n in QCA.node_iter_to_root(node, select="TorsionDrive")]
+
+                                    if len(tdids) > 0:
+                                        metadata += 'TdIDs ' + '.'.join(tdids) + ' '
+
+                                    contrs = [str(n.payload) for n in QCA.node_iter_to_root(node, select="Constraint")]
+                                    if len(contrs) > 0:
+                                        metadata += 'Constraints ' + '.'.join(contrs) + ' '
+
+                                    tdname = '.'.join(tdids)
+                                    if len(tdname) > 0:
+                                        tdname += '.'
+                                    if len(traj) > 0:
+                                        fname ='geometric.'+errtype+'.traj.' + tdname + node.payload + '.' + traj[-1].payload + '.xyz'
+                                        # print("Trajectory found... saving", fname)
+                                        mol = QCA.db[traj[-1].payload]['data']
+                                        with open(fname, 'w') as xyzfid:
+                                            _ = offsb.qcarchive.qcmol_to_xyz(mol, fd=xyzfid, comment=metadata+"OptID "+ node.payload + " MoleculeID " + traj[-1].payload + " Error= " + xyzerrmsg)
+                                    else:
+                                        mol_id = 'QCM-'+qcp['initial_molecule']
+                                        fname ='geometric.'+errtype+'.initial.'+ tdname + node.payload + '.' + mol_id + '.xyz'
+                                        # print("Trajectory not found... saving input molecule", fname)
+                                        mol = QCA.db[mol_id]['data']
+                                        if 'geometry' in mol and 'symbols' in mol:
+                                            with open(fname, 'w') as xyzfid:
+                                                _ = offsb.qcarchive.qcmol_to_xyz(mol, fd=xyzfid, comment=metadata+"OptID "+ node.payload + " MoleculeID " + mol_id + " Error= " + xyzerrmsg)
+                                        else:
+                                            # print("Initial molecule missing!")
+                                            errmsg += "XXXXISSUEXXXX\n"
+                                            errmsg += "Initial molecule was missing!\n"
+                                            errmsg += "xxxxxxxxxxxxx\n"
+                                if not (qcp['stdout'] is None):
+                                    msg = list(client.query_kvstore(int(qcp['stdout'])).values())[0]
+                                    errmsg += "xxxxISSUExxxx\n"
+                                    errmsg += "Status was not complete; stdout is:\n"
+                                    errmsg += msg
+                                    errmsg += "xxxxxxxxxxxxx\n"
+                                if not (qcp['stderr'] is None):
+                                    msg = list(client.query_kvstore(int(qcp['stderr'])).values())[0]
+                                    errmsg += "####ISSUE####\n"
+                                    errmsg += "Status was not complete; stderr is:\n"
+                                    errmsg += msg
+                                    errmsg += "#############\n"
+                            except Exception as e:
+                                fid.write("Internal issue:\n" + str(e) + '\n')
+
+                        if status != "COMPLETE" and node.name == "TorsionDrive":
+                            statbar = "XXXX"
+                    tderror = False
+                    if node.name == "TorsionDrive" and status != "COMPLETE":
+                        tdi += 1
+                        tderror = True
+                    if full_report or (len(errmsg) > 0 or tderror):
+                        out_str = "{:2d} {} {} {}\n".format(tdi,statbar*i, " ".join([str(node.index),str(node.name),  str(node.payload)]), status)
+                        fid.write(out_str)
+                        if errmsg != "":
+                            err_str = "\n{}\n".format(errmsg)
+                            fid.write(err_str)
 
 
         fid.write("____Done____\n")
@@ -328,12 +344,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="The OpenForceField Spellbook")
     parser.add_argument('--report-errors', action="store_true")
     parser.add_argument('--report-energy', action="store_true")
+    parser.add_argument('--datasets', type=str)
     args = parser.parse_args()
 
+    if args.datasets is not None:
+        datasets = load_dataset_input(args.datasets)
+    
     qcasb = None
     if args.report_energy:
-        if qcasb is None:
-            qcasb = QCArchiveSpellBook()
+        qcasb = QCArchiveSpellBook(datasets=args.datasets)
         enes_per_mol= qcasb.energy_minimum_per_molecule()
         with open("enes.txt", 'w') as fid:
             for cmiles,enes in enes_per_mol.items():
@@ -342,6 +361,6 @@ if __name__ == "__main__":
                     fid.write("    {:12.8f}\n".format(ene))
     if args.report_errors:
         if qcasb is None:
-            qcasb = QCArchiveSpellBook()
+            qcasb = QCArchiveSpellBook(datasets=args.datasets)
         qcasb.error_report_per_dataset()
 

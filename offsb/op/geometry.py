@@ -45,7 +45,7 @@ class TorsionOperation( treedi.tree.TreeOperation):
     def measure( mol, idx):
         """calculates proper torsion of [i, j, k, l]"""
         atoms = mol.get( "geometry")[ np.newaxis, :, :]
-        noncenter = [idx[0]]+idx[2:]
+        noncenter = [idx[0]]+idx[2:4]
         mags = np.linalg.norm(atoms[:,noncenter,:] - atoms[:,idx[1],:][:,np.newaxis,:], axis=2)
         atoms_trans = atoms - atoms[:,idx[1],:][:,np.newaxis,:]
         unit = atoms_trans[:,noncenter,:] / mags[:,:,np.newaxis]
@@ -177,7 +177,7 @@ class ImproperTorsionOperation( treedi.tree.TreeOperation):
     def measure(mol, idx):
         """calculates improper torsion of [i, center, j, k]"""
         atoms = mol.get( "geometry")[ np.newaxis, :, :]
-        noncenter = [idx[0]]+idx[2:]
+        noncenter = [idx[0]]+idx[2:4]
         mags = np.linalg.norm(atoms[:,noncenter,:] - atoms[:,idx[1],:][:,np.newaxis,:], axis=2)
         atoms_trans = atoms - atoms[:,idx[1],:][:,np.newaxis,:]
         unit = atoms_trans[:,noncenter,:] / mags[:,:,np.newaxis]
