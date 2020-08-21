@@ -70,7 +70,6 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
         self.filename = filename
 
         self.minimize = False
-        self.processes = 8
         self.constrain = False
         search_pth = list(iter_entry_points(group='openforcefield.smirnoff_forcefield_directory'))
         abspth = os.path.join(".", filename)

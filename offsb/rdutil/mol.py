@@ -41,7 +41,7 @@ def embed_qcmol_3d( mol, qcmol):
         conf.SetAtomPosition(i, coordMap[i])
     ret = mol.AddConformer(conf, assignId=True)
     # not sure if this can fail, so just accept anything 
-    return ret > -1
+    return ret
 
     #ret = AllChem.EmbedMolecule( mol, coordMap=coordMap, forceTol=.01, 
     #        ignoreSmoothingFailures=True, maxAttempts=100000,

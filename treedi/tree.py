@@ -25,7 +25,7 @@ def link_iter_dive( t):
     for c in t.link.values():
         yield from link_iter_dive( c)
 
-def link_iter_to_root( t):
+def link_iter_to_root( t, select, state):
     yield t
     if t.source is not None:
         yield from link_iter_to_root( t.source, select, state)
@@ -64,6 +64,7 @@ class Tree( ABC):
             self.node_index = dict()
 
 
+        self.processes = 8
         self.link = {}
         self.name = name
         self.modified = set()
@@ -276,7 +277,7 @@ class Tree( ABC):
             return 0
         return 1 + sum([ self.node_descendents( self[v]) for v in node.children])
 
-class PartitionTree( Tree):
+class PartitionTree(Tree):
     """ A parition tree holds indices and applies them to nodes 
         Importantly, partition trees are not trees... 
         They are a dictionary, where it copies the source tree index as keys,
