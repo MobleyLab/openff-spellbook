@@ -104,6 +104,15 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
     def associate( self, source):
         super().associate( source)
 
+    def _apply_initialize(self, targets):
+        pass
+
+    def _apply_finalize(self, targets):
+        pass
+
+    def _unpack_result(self, ret):
+        self.db.update(ret) 
+
     def apply_single( self, i, target):
 
         def unmap( xyz, map_idx):
@@ -327,43 +336,43 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
                 comment=qcmolid + " label fail " + target.payload)
         return { target: ret_str , "return": ret_obj}
 
-    def apply( self, targets=None, procs=1):
-        if targets is None:
-            targets = list(self.source.iter_entry())
-        elif not hasattr( targets, "__iter__"):
-            targets = [targets]
+    # def apply( self, targets=None, procs=1):
+    #     if targets is None:
+    #         targets = list(self.source.iter_entry())
+    #     elif not hasattr( targets, "__iter__"):
+    #         targets = [targets]
 
-        # expand if a generator
-        targets = list(targets)
+    #     # expand if a generator
+    #     targets = list(targets)
 
-        n_targets = len(targets)
-
-
+    #     n_targets = len(targets)
 
 
-        if self.processes > 1:
-            import concurrent.futures
-            exe = concurrent.futures.ProcessPoolExecutor(max_workers=self.processes)
 
-            work = [ exe.submit( OpenMMEnergy.apply_single, self, n, target ) for n, target in enumerate(targets, 1) ]
-            for n,future in enumerate(concurrent.futures.as_completed(work), 1):
-                if future.done:
-                    try:
-                        val = future.result()
-                    except RuntimeError:
-                        print("RUNTIME ERROR; race condition??")
-                if val is None:
-                    print("data is None?!?")
-                    continue
-                for tgt, ret in val.items():
-                    if tgt == "return":
-                        self.db.update(ret) 
-                    else:
-                        print( n,"/", n_targets, tgt)
-                        for line in ret:
-                            print(line, end="")
 
-            exe.shutdown()
+    #     if self.processes > 1:
+    #         import concurrent.futures
+    #         exe = concurrent.futures.ProcessPoolExecutor(max_workers=self.processes)
+
+    #         work = [ exe.submit( OpenMMEnergy.apply_single, self, n, target ) for n, target in enumerate(targets, 1) ]
+    #         for n,future in enumerate(concurrent.futures.as_completed(work), 1):
+    #             if future.done:
+    #                 try:
+    #                     val = future.result()
+    #                 except RuntimeError:
+    #                     print("RUNTIME ERROR; race condition??")
+    #             if val is None:
+    #                 print("data is None?!?")
+    #                 continue
+    #             for tgt, ret in val.items():
+    #                 if tgt == "return":
+    #                     self.db.update(ret) 
+    #                 else:
+    #                     print( n,"/", n_targets, tgt)
+    #                     for line in ret:
+    #                         print(line, end="")
+
+    #         exe.shutdown()
 
         # This version seems to be more stable, but all of the results must
         # finish before iterating
@@ -388,17 +397,17 @@ class OpenMMEnergy( treedi.tree.PartitionTree):
 
 
 
-        # single process mode; does not launch any new processes
-        if self.processes == 1:
-            for n, target in enumerate( targets, 1):
-                val = self.apply_single( n, target)
-                for tgt, ret in val.items():
-                    if tgt == "return":
-                        self.db.update(ret) 
-                    else:
-                        print( n,"/", n_targets, tgt)
-                        for line in ret:
-                            print(line, end="")
+        # # single process mode; does not launch any new processes
+        # if self.processes == 1:
+        #     for n, target in enumerate( targets, 1):
+        #         val = self.apply_single( n, target)
+        #         for tgt, ret in val.items():
+        #             if tgt == "return":
+        #                 self.db.update(ret) 
+        #             else:
+        #                 print( n,"/", n_targets, tgt)
+        #                 for line in ret:
+        #                     print(line, end="")
     ########################################
     def calculate_dihedral ( self, coords, idx1, idx2, idx3, idx4 ):
         # from:

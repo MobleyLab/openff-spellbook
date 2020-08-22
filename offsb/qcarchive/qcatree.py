@@ -1155,7 +1155,10 @@ class QCATree( Tree.Tree):
                 self.root(), select="TorsionDrive")]
         if not hasattr(tdr_nodes, "__iter__"):
             tdr_nodes = [tdr_nodes]
+        tdr_nodes = flatten_list(
+            [self.node_iter_depth_first(x, select="TorsionDrive") for x in tdr_nodes])
         for tdr_node in tdr_nodes:
+
             tdr = self.db[tdr_node.payload]["data"]
             minimum_positions = tdr['minimum_positions']
             opt_hist = tdr['optimization_history']

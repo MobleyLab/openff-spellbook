@@ -1,7 +1,99 @@
 import treedi.tree
 import numpy as np
+from abc import (ABC, abstractmethod)
+import logging
 
-class AngleOperation( treedi.tree.TreeOperation):
+logger = logging.getLogger("GeometryOperation")
+
+class GeometryOperation(treedi.tree.TreeOperation, ABC):
+
+    def __init__( self, source, name):
+        super().__init__( source, name)
+        self._select="Molecule"
+        self.processes=1
+
+    def _unpack_result(self, ret):
+        self.db.update(ret)
+
+    def apply(self, targets=None):
+        super().apply(self._select, targets=targets)
+
+    def _generate_apply_kwargs(self, i, target):
+        entry = self.source.source.node_iter_to_root(target, select="Entry")
+        entry = next(entry)
+
+        mol = self.source.source.db[target.payload]['data']['geometry']
+
+        obj = self.source.db[self.source[entry.index].payload]
+        masks = obj["data"]
+        return {"masks": masks, "mol": mol, "name": self.name, "op": self.op,
+                "entry": str(entry)}
+
+
+    @staticmethod
+    def apply_single(i, target, kwargs=None):
+
+        if kwargs is None:
+            raise Exception("Geometry operation not given necessary config")
+        # entry = self.source.source.node_iter_to_root(target, select="Entry")
+        # entry = next(entry)
+
+        # mol = self.source.source.db[target.payload]
+
+        # obj = self.source.db[self.source[entry.index].payload]
+        # masks = obj["data"]
+
+        masks = kwargs['masks']
+        mol = kwargs['mol']
+        op = kwargs['op']
+        entry = kwargs['entry']
+
+        ret = {}
+        calcs = 0
+
+        for mask in masks:
+            # mask = [i-1 for i in mask]
+            logger.debug("Measuring {} on entry {} molecule {}".format(
+                str(mask), entry, target.payload))
+            ret[tuple(mask)] = op(mol, mask)
+            calcs += 1
+
+        # out_str = "calculated: {}\n".format(calcs)
+        return {target.payload: None, "return": {target.payload: ret}}
+
+    # def apply(self, targets=None, select="Molecule"):
+    #     calcs = 0
+    #     self.source.apply(targets=targets)
+    #     if targets is None:
+    #         entries = list(self.source.source.iter_entry())
+    #     else:
+    #         entries = targets
+    #     if not hasattr(entries, "__iter__"):
+    #         entries = [entries]
+
+    #     for entry in entries:
+    #         mol_calcs = 0
+    #         obj = self.source.db[self.source[entry.index].payload]
+
+    #         masks = obj["data"]
+
+    #         for mol_node in self.node_iter_depth_first(entry, select=select):
+    #             mol = self.source.source.db[mol_node.payload]
+    #             for mask in masks:
+    #                 ret = {}
+    #                 if mol_node.payload in self.db:
+    #                     ret = self.db.get( mol_node.payload)
+    #                 else:
+    #                     self.db[mol_node.payload] = dict()
+
+    #                 ret[tuple(mask)] = self.op( mol["data"], [i-1 for i in mask])
+    #                 self.db[mol_node.payload].update( ret)
+    #                 mol_calcs += 1
+
+    #         calcs += mol_calcs
+    #     print(self.name + " calculated: {}".format( calcs))
+
+class AngleOperation(GeometryOperation):
 
     def __init__( self, source, name):
         super().__init__( source, name)
@@ -9,7 +101,7 @@ class AngleOperation( treedi.tree.TreeOperation):
     @staticmethod
     def measure(mol, idx):
         """calculates angle between origin and consecutive atom pairs"""
-        atoms = mol.get( "geometry")[ np.newaxis, :, :]
+        atoms = mol[ np.newaxis, :, :]
         mags = np.linalg.norm(atoms[:,[idx[0],idx[2]],:] - atoms[:,idx[1],:][:,np.newaxis,:], axis=2)
         atoms_trans = atoms - atoms[:,idx[1],:][:,np.newaxis,:]
         unit = atoms_trans[:,[idx[0],idx[2]],:] / mags[:,:,np.newaxis]
@@ -21,7 +113,7 @@ class AngleOperation( treedi.tree.TreeOperation):
     def op(self, mol, idx):
         return self.measure(mol, idx)
 
-class BondOperation( treedi.tree.TreeOperation):
+class BondOperation(GeometryOperation):
 
     def __init__( self, source, name):
         super().__init__( source, name)
@@ -29,14 +121,14 @@ class BondOperation( treedi.tree.TreeOperation):
     @staticmethod
     def measure(mol, idx):
         """calculates distance from first atom to remaining atoms"""
-        atoms = mol.get( "geometry")[ np.newaxis, :, :]
+        atoms = mol[ np.newaxis, :, :]
         #print( "Have", len(atoms[0]), "atoms and index is", idx)
         return np.linalg.norm(atoms[:,idx[1],:] - atoms[:,idx[0],:], axis=1)
 
     def op(self, mol, idx):
         return self.measure(mol, idx)
 
-class TorsionOperation( treedi.tree.TreeOperation):
+class TorsionOperation(GeometryOperation):
 
     def __init__( self, source, name):
         super().__init__( source, name)
@@ -44,7 +136,7 @@ class TorsionOperation( treedi.tree.TreeOperation):
     @staticmethod
     def measure( mol, idx):
         """calculates proper torsion of [i, j, k, l]"""
-        atoms = mol.get( "geometry")[ np.newaxis, :, :]
+        atoms = mol[np.newaxis, :, :]
         noncenter = [idx[0]]+idx[2:4]
         mags = np.linalg.norm(atoms[:,noncenter,:] - atoms[:,idx[1],:][:,np.newaxis,:], axis=2)
         atoms_trans = atoms - atoms[:,idx[1],:][:,np.newaxis,:]
@@ -88,7 +180,7 @@ class TorsionOperation( treedi.tree.TreeOperation):
         trajectories (MxNxD)
         """
         
-        p = mol.get( "geometry")[idx]
+        p = mol[idx]
         p0 = p[0]
         p1 = p[1]
         p2 = p[2]
@@ -130,7 +222,7 @@ class TorsionOperation( treedi.tree.TreeOperation):
         trajectories (MxNxD)
         """
         
-        p = mol.get( "geometry")[np.newaxis, idx, :]
+        p = mol[np.newaxis, idx, :]
         p0 = p[:,0]
         p1 = p[:,1]
         p2 = p[:,2]
@@ -168,7 +260,7 @@ class TorsionOperation( treedi.tree.TreeOperation):
     def op(self, mol, idx):
         return self.measure_praxeolitic(mol, idx)
 
-class ImproperTorsionOperation( treedi.tree.TreeOperation):
+class ImproperTorsionOperation(GeometryOperation):
 
     def __init__( self, source, name):
         super().__init__( source, name)
@@ -176,7 +268,7 @@ class ImproperTorsionOperation( treedi.tree.TreeOperation):
     @staticmethod
     def measure(mol, idx):
         """calculates improper torsion of [i, center, j, k]"""
-        atoms = mol.get( "geometry")[ np.newaxis, :, :]
+        atoms = mol[ np.newaxis, :, :]
         noncenter = [idx[0]]+idx[2:4]
         mags = np.linalg.norm(atoms[:,noncenter,:] - atoms[:,idx[1],:][:,np.newaxis,:], axis=2)
         atoms_trans = atoms - atoms[:,idx[1],:][:,np.newaxis,:]
