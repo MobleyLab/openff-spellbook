@@ -60,8 +60,10 @@ class ChemType(abc.ABC):
             Whether the type can represent a primitive
         """
 
-        present = "0" if self.inv else "1"
+        if self.inv:
+            return False
 
+        present = "1"
         for name in self._fields:
             field = getattr(self, name)
             if present not in field:
@@ -78,7 +80,7 @@ class ChemType(abc.ABC):
            The new ChemType object
         """
 
-        cls = cls()
+        cls = self.__class__()
 
         for field in self._fields:
             setattr(cls, field, getattr(self, field))
@@ -108,6 +110,11 @@ class ChemType(abc.ABC):
         if inv:
             ret = "1" if bit == "0" else "0"
         return ret
+
+    def _explicit_flip(self):
+        for field in self._fields:
+            setattr(self, field, self._str_flip(getattr(self, field)))
+
 
     def _reduce(self):
         order = 1 if self._endian == 1 else -1
@@ -153,7 +160,8 @@ class ChemType(abc.ABC):
         border = -1 if endian == 1 else 1
         pairs = list(it.zip_longest(a[::aorder], b[::border], fillvalue="0"))
         return "".join([str(int(
-            self._flip(i, self.inv)!=self._flip(j, inv) and i+j != "00"))
+            self._flip(i, self.inv)!=self._flip(j, inv) and 
+            self._flip(i, self.inv)+self._flip(j, inv) != "00"))
             for i,j in pairs[::aorder]])
 
     def _check_sane_compare(self, o):
@@ -178,7 +186,7 @@ class ChemType(abc.ABC):
     def _dispatch_op(self, fn):
 
         args = [getattr(self, field) for field in self._fields]
-        ret = fn(*args)
+        ret = fn(*args, inv=self.inv)
         ret = [self._trim(r) for r in ret]
         return self.from_data_string(*ret)
 
@@ -219,7 +227,7 @@ class ChemType(abc.ABC):
 
         # trailing bits will be 1 if only one is inverted
         # so flip and set inverse st trailing bits are 0
-        if self.inv != o.inv:
+        if self.inv ^ o.inv:
             ret._explicit_flip()
             ret.inv = True
 
@@ -642,7 +650,13 @@ class ChemGraph(ChemType, abc.ABC):
         return a != b
 
 class BondGraph(ChemGraph):
-    def __init__(self, atom1, bond, atom2):
+    def __init__(self, atom1=None, bond=None, atom2=None):
+        if atom1 is None:
+            atom1 = AtomType()
+        if bond is None:
+            bond = BondType()
+        if atom2 is None:
+            atom2 = AtomType()
         self._atom1 = atom1
         self._bond = bond
         self._atom2 = atom2
@@ -670,7 +684,17 @@ class BondGraph(ChemGraph):
                 + self._atom2.__repr__() + ")"
 
 class AngleGraph(ChemGraph):
-    def __init__(self, atom1, bond1, atom2, bond2, atom3):
+    def __init__(self, atom1=None, bond1=None, atom2=None, bond2=None, atom3=None):
+        if atom1 is None:
+            atom1 = AtomType()
+        if bond1 is None:
+            bond1 = BondType()
+        if atom2 is None:
+            atom2 = AtomType()
+        if bond2 is None:
+            bond2 = BondType()
+        if atom3 is None:
+            atom3 = AtomType()
         self._atom1 = atom1
         self._bond1 = bond1
         self._atom2 = atom2
@@ -699,12 +723,26 @@ class AngleGraph(ChemGraph):
     def __repr__(self):
         return "(" + self._atom1.__repr__() + ") [" \
                 + self._bond1.__repr__() + "] (" \
-                + self._atom2.__repr__() + ")" \
+                + self._atom2.__repr__() + ") [" \
                 + self._bond2.__repr__() + "] (" \
                 + self._atom3.__repr__() + ")"
 
 class DihedralGraph(ChemGraph):
-    def __init__(self, atom1, bond1, atom2, bond2, atom3, bond3, atom4):
+    def __init__(self, atom1=None, bond1=None, atom2=None, bond2=None, atom3=None, bond3=None, atom4=None):
+        if atom1 is None:
+            atom1 = AtomType()
+        if bond1 is None:
+            bond1 = BondType()
+        if atom2 is None:
+            atom2 = AtomType()
+        if bond2 is None:
+            bond2 = BondType()
+        if atom3 is None:
+            atom3 = AtomType()
+        if bond3 is None:
+            bond3 = BondType()
+        if atom4 is None:
+            atom4 = AtomType()
         self._atom1 = atom1
         self._bond1 = bond1
         self._atom2 = atom2
@@ -738,9 +776,9 @@ class DihedralGraph(ChemGraph):
     def __repr__(self):
         return "(" + self._atom1.__repr__() + ") [" \
                 + self._bond1.__repr__() + "] (" \
-                + self._atom2.__repr__() + ")" \
+                + self._atom2.__repr__() + ") [" \
                 + self._bond2.__repr__() + "] (" \
-                + self._atom3.__repr__() + ")" \
+                + self._atom3.__repr__() + ") [" \
                 + self._bond3.__repr__() + "] (" \
                 + self._atom4.__repr__() + ")"
 
@@ -751,9 +789,9 @@ class OutOfPlaneGraph(DihedralGraph):
     def __repr__(self):
         return "(" + self._atom1.__repr__() + ") [" \
                 + self._bond1.__repr__() + "] (" \
-                + self._atom2.__repr__() + ")" \
+                + self._atom2.__repr__() + ") [" \
                 + self._bond2.__repr__() + "] ((" \
-                + self._atom3.__repr__() + "))" \
+                + self._atom3.__repr__() + ")) [" \
                 + self._bond3.__repr__() + "] (" \
                 + self._atom4.__repr__() + ")"
     
