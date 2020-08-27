@@ -7,8 +7,13 @@ from ..tools.util import flatten_list
 import qcfractal.interface as ptl
 import treedi.tree as Tree
 import treedi.node as Node
+from treedi.tree import DebugDict
 
 from .qca_comparisons import match_canonical_isomeric_explicit_hydrogen_smiles
+
+DEFAULT_DB = DebugDict
+DEFAULT_DB = dict
+
 
 def wrap_fn(fn, ids, i, j, **kwargs):
     """
@@ -280,7 +285,7 @@ class QCATree( Tree.Tree):
 
         for key, val in fresh_obj_map.items():
             if key not in self.db:
-                self.db[obj] = { "data": val }
+                self.db[key] = DEFAULT_DB({ "data": val })
             else:
                 self.db[key]["data"] = val
 
@@ -314,7 +319,7 @@ class QCATree( Tree.Tree):
 
         for key, val in fresh_obj_map.items():
             if key not in self.db:
-                self.db[obj] = { "data": val }
+                self.db[key] = DEFAULT_DB({ "data": val })
             else:
                 self.db[key]["data"] = val
 
@@ -354,7 +359,7 @@ class QCATree( Tree.Tree):
                 mol = fresh_obj_map[node.payload]
                 assert mol is not None
 
-                self.db[node.payload] = {"data": mol}
+                self.db[node.payload] = DEFAULT_DB({"data": mol})
                 node.name = "Molecule"
                 node.stamp = datetime.now()
                 self.register_modified(node, state=Node.CLEAN)
@@ -393,7 +398,7 @@ class QCATree( Tree.Tree):
                 result = fresh_obj_map[ node.payload]
                 assert result is not None
 
-                self.db[node.payload] = { "data": result }
+                self.db[node.payload] = DEFAULT_DB({ "data": result })
                 self.register_modified( node, state=Node.CLEAN)
                 if "Stub" in node.name:
                     node.name = node.name[:-4]
@@ -465,7 +470,7 @@ class QCATree( Tree.Tree):
             str( datetime.now() - total), total_received), end="")
 
         # Reapply the stripped identifier
-        obj_map = { id_suf + str(obj['id']): obj for obj in objs }
+        obj_map = {id_suf + str(obj['id']): obj for obj in objs}
         return obj_map
 
     def batch_download_hessian( self, full_ids, fn, max_query=1000, projection=None):
@@ -692,10 +697,19 @@ class QCATree( Tree.Tree):
         # add this entry node
         nodes = []
         for rec in records:
-            pl_name = "QCE-"+str(rec)
+            # add ds.data.id to ensure that entries are unique across dict
+            # TODO this should probably have server/db info as well
+            # since two mirror servers could have same ids but different data
+
+            pl_name = "QCE." + ds.data.id + "-" + str(rec)
+            if pl_name in self.db:
+                if records[rec].name == self.db[pl_name]['data'].name:
+                    # Not sure why, but this Entry was already added.
+                    # Just assume we can skip it.
+                    continue
             node = Node.Node(name="Entry", payload=pl_name)
             node = self.add( ds_node.index, node)
-            self.db[pl_name] = { "data": records[rec] }
+            self.db[pl_name] = DEFAULT_DB({ "data": records[rec] })
             # add the specs for this entry
             if "Specification" in self.drop:
                 return
@@ -703,7 +717,7 @@ class QCATree( Tree.Tree):
                 pl_name = "QCS-"+str(spec)
                 spec_node = Node.Node(name="Specification", payload=pl_name)
                 spec_node = self.add(node.index, spec_node)
-                self[pl_name] = {"data": ds_specs[spec.lower()].dict()}
+                self[pl_name] = DEFAULT_DB({"data": ds_specs[spec.lower()].dict()})
 
                 if name in self.drop:
                     return
@@ -719,7 +733,7 @@ class QCATree( Tree.Tree):
                     if proc != "QCP-" + records[rec].object_map[spec]:
                         continue
                     pl_name = proc
-                    pload = {"data": obj_map[proc]}
+                    pload = DEFAULT_DB({"data": obj_map[proc]})
                     proc_node = Node.Node(name=name, payload=pl_name)
                     proc_node = self.add(spec_node.index, proc_node)
                     self.db[pl_name] = pload
@@ -735,11 +749,11 @@ class QCATree( Tree.Tree):
                         for molid_i in molid:
                             molid_i = "QCM-" + molid_i
                             mol_obj = init_mol_map[molid_i]
-                            self.db[molid_i] = {"data": mol_obj}
+                            self.db[molid_i] = DEFAULT_DB({"data": mol_obj})
                     else:
                         molid = "QCM-" + molid
                         mol_obj = init_mol_map[molid]
-                        self.db[molid] = {"data": mol_obj}
+                        self.db[molid] = DEFAULT_DB({"data": mol_obj})
 
 #        nodes = []
 #        spec_data = None
@@ -797,7 +811,7 @@ class QCATree( Tree.Tree):
         if not hasattr( nids, "__iter__"):
             nids = [nids]
         nodes = [self.node_index.get( nid) for nid in nids]
-        opt_ids = [list( self.db.get( node.payload).get( "data").get( "grid_optimizations").values()) for node in nodes]
+        opt_ids = [list( self.db.get( node.payload).get("data").get("grid_optimizations").values()) for node in nodes]
         client = self.db["ROOT"]["data"]
         print("Downloading optimization information for",
             len( flatten_list( opt_ids, times=-1)))
@@ -841,7 +855,7 @@ class QCATree( Tree.Tree):
                 opt_node = Node.Node( name="Optimization", payload=index)
                 opt_nodes.append(opt_node)
                 opt_node = self.add(constraint_node.index, opt_node)
-                self.db[index] = { "data": opt_map[index] }
+                self.db[index] = DEFAULT_DB({ "data": opt_map[index] })
 
         self.branch_optimization_record( [x.index for x in opt_nodes], skel=skel)
 
@@ -903,7 +917,7 @@ class QCATree( Tree.Tree):
                     opt_node = Node.Node( name="Optimization", payload=index)
                     opt_nodes.append( opt_node)
                     opt_node = self.add(constraint_node.index, opt_node)
-                    self.db[index] = {"data": opt_map[index]}
+                    self.db[index] = DEFAULT_DB({"data": opt_map[index]})
 
         self.branch_optimization_record( [x.index for x in opt_nodes], skel=skel)
 
@@ -988,7 +1002,7 @@ class QCATree( Tree.Tree):
                     result_nodes.append(result_node)
                     result_node = self.add(node.index, result_node)
                     pl = {} if skel else result_map[index]
-                    self.db[index] = {"data" : pl }
+                    self.db[index] = DEFAULT_DB({"data" : pl })
             else:
                 print("No gradient information for", node,": Not complete?")
 
@@ -1053,11 +1067,11 @@ class QCATree( Tree.Tree):
                 if index in mol_map:
                     name = "MoleculeStub" if skel else "Molecule"
                     state = "NEW" if skel else "CLEAN"
-                    pl = {"data": mol_map[index]}
+                    pl = DEFAULT_DB({"data": mol_map[index]})
                 else:
                     name = "MoleculeStub"
                     state = "NEW"
-                    pl = {"data": {'id' : index}}
+                    pl = DEFAULT_DB({"data": DEFAULT_DB({'id' : index})})
 
                 mol_node = Node.Node( name=name, payload=index)
                 mol_node.state = state
@@ -1093,7 +1107,7 @@ class QCATree( Tree.Tree):
                         hess_node = Node.Node( name="Hessian", payload=hess)
                         hess_node.state = Node.CLEAN
                         hess_node = self.add(mol.index, hess_node)
-                        self.db[hess] = { "data" : pl }
+                        self.db[hess] = DEFAULT_DB({ "data" : pl })
 
     def torsiondriverecord_minimum(self, tdr_nodes):
 

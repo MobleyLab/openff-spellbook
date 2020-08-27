@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-import interfoot.tools.const as const                                                                                                                         
+import offsb.tools.const as const                                                                                                                         
 import pickle
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 def select_param( lbl):
@@ -51,10 +52,7 @@ def plot_displacement( ax, dat, label_obj, displacement_fn=None):
         ax.axhline(y=equil + delta, ls='--', marker='.', color='black', ms=10, mec='black', mfc=color)
         ax.axhline(y=equil - delta, ls='--', marker='.', color='black', ms=10, mec='black', mfc=color)
 
-def select_data_of_oFFlabel_from_td(QCAtree, oFFtree, datatree, entry=None, query='b5', verbose=False):
-    import numpy as np
-    import interfoot.sources.qcarchive as qca
-    import interfoot.tools.node as Node
+def select_data_of_oFFlabel_from_td(QCA, oFFtree, datatree, entries=None, specs=["default"], query='b5', verbose=False):
     
     oFF_param = select_param( query)
 
@@ -64,40 +62,43 @@ def select_data_of_oFFlabel_from_td(QCAtree, oFFtree, datatree, entry=None, quer
     visited = set()
 #    iter_fn = node_iter_torsiondriverecord_minimum
 
-    if entry is None:
-        entries = QCAtree.iter_entry()
-    elif not hasattr( entry, "__iter__"):
-        entries = [entry]
-    else:
-        entries = entry
-    for entry in entries:
-        ID = entry.index
-        obj = QCAtree.db.get( entry.payload)
+    if entries is None:
+        entries = QCA.iter_entry()
+    elif not hasattr( entries, "__iter__"):
+        entries = [entries]
+
+    for entry_node in entries:
+        ID = entry_node.index
+        obj = QCA.db.get( entry_node.payload).get("data")
         smiles = obj.get( "entry").attributes.get( "canonical_smiles")
-        status = obj.get( "data").get( "status")[:]
-        oFFobj = oFFtree.db.get( entry.payload)
-        labels = oFFobj.get( "data")
-        found = False
-        #for mol in QCAtree.node_iter_optimization_minimum( entry, select="Molecule"):
-        for mol in QCAtree.node_iter_torsiondriverecord_minimum( entry, select="Molecule"):
-            if mol.index in visited:
-                continue
-            visited.add(mol.index)
-            for pair, label in labels.get( oFF_param).items():
-                #print( pair, label)
-                if label != query:
-                    continue
+        oFFobj = oFFtree.db.get( entry_node.payload)
+        labels = oFFobj.get("data")
+        for spec_node in [QCA[i] for i in entry_node.children if QCA[i].payload.split("-")[1] in specs]:
+            spec = spec_node.payload
+            for procedure_node in [QCA[i] for i in spec_node.children]:
+                status = QCA.db[procedure_node.payload].get("data").get("status")[:]
 
-                dobj = datatree.db.get( mol.payload)
-                angle = eval(list( QCAtree.node_iter_to_root( mol, select="Constraint"))[0].payload)[0]
-                molid = mol.index
-                assert mol.index in [ x.index for x in QCAtree.node_iter_to_root( mol)]
+                found = False
+                #for mol in QCAtree.node_iter_optimization_minimum( entry, select="Molecule"):
+                for mol in QCA.node_iter_torsiondriverecord_minimum( procedure_node, select="Molecule"):
+                    if mol.index in visited:
+                        continue
+                    visited.add(mol.index)
+                    for pair, label in labels.get( oFF_param).items():
+                        #print( pair, label)
+                        if label != query:
+                            continue
 
-                vals = dobj.get( pair)
-                result.append([ID, molid, query, pair, angle, vals, smiles])
-                pair="-".join([str(k) for k in pair])  
-                if verbose:
-                    print("Entry({:11s}) {:16s} {:16s} {} {:4s} {:4.0f} {} {:64s}".format( status, ID, molid, pair, query, angle, vals, smiles))
+                        dobj = datatree.db.get( mol.payload)
+                        angle = next(QCA.node_iter_to_root(mol, select="Constraint")).payload[2]
+                        molid = mol.index
+                        assert mol.index in [ x.index for x in QCA.node_iter_to_root( mol)]
+
+                        vals = dobj.get( pair)
+                        result.append([ID, spec, molid, query, pair, angle, vals, smiles])
+                        pair="-".join([str(k) for k in pair])  
+                        if verbose:
+                            print("Entry({:11s}) {:16s} {:16s} {:16s} {} {:4s} {:4.0f} {} {:64s}".format( status, ID, spec, molid, pair, query, angle, vals, smiles))
 
     return result
 
@@ -129,7 +130,6 @@ def plot_td_all_minima( ang, vals, label_obj, displacement_fn=None):
     """
     plots torsiondrive data of all optimizations (does not connect points)
     """
-    import matplotlib.pyplot as plt
     rows = 1
     fig = plt.figure(figsize=(8,4*rows),dpi=120)
     ax_grid = []
@@ -154,8 +154,6 @@ def plot_td_minima( ang, vals, atoms, label_obj, molid=None, displacement_fn=Non
     atoms should be [( molid, *group)]
     molid will only plot those which match e.g. ['2', '3', '4']
     """
-    import matplotlib.pyplot as plt
-    import numpy as np
     rows = 1
     fig = plt.figure(figsize=(8,4*rows),dpi=120)
     ax_grid = []
@@ -204,7 +202,7 @@ def plot_td_minima( ang, vals, atoms, label_obj, molid=None, displacement_fn=Non
     return fig
 
 def example():
-    with open( 'oFF-1.1.0.p', 'rb') as fid:
+    with open( 'off-1.0.0.p', 'rb') as fid:
         oFF = pickle.load(fid)
     with open( 'bonds.p', 'rb') as fid:
         bonds = pickle.load(fid)
@@ -212,10 +210,11 @@ def example():
         QCA = pickle.load(fid)
     labels = list(oFF.db.get( "ROOT").get( "data").get( "Bonds").keys())
 
+    labels = ['b7']
     for q in labels:                                                                                                                                    
         for entry in QCA.iter_entry():                                                                                                                  
             print( q, entry)                                                                                                                            
-            ret = select_data_of_oFFlabel_from_td( QCA, oFF, bonds, entry=entry, query=q, verbose=False)                                                 
+            ret = select_data_of_oFFlabel_from_td( QCA, oFF, bonds, entries=entry, specs=["default"], query=q, verbose=False)                                                 
 
             val = []
             unused = [val.extend(x[5]) for x in ret]

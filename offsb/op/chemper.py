@@ -83,7 +83,7 @@ class ChemperOperation(treedi.tree.TreeOperation):
     def _unpack_result(self, val):
         self.db.update(val)
 
-    def _generate_apply_kwargs(self, i, target):
+    def _generate_apply_kwargs(self, i, target, kwargs={}):
 
         # labels = self.source.db[target.payload]["data"]
         entry = self.source.source.db[target.payload]["data"]
@@ -120,7 +120,13 @@ class ChemperOperation(treedi.tree.TreeOperation):
         obj = self.source.db[self.source[target.index].payload]
         masks = obj["data"]
 
-        return {"masks": masks, "mol": mol, "name": self.name, "entry": str(entry)}
+        kwargs.update({
+            "masks": masks,
+            "mol": mol,
+            "name": self.name,
+            "entry": str(entry)
+        })
+        return kwargs
 
     @staticmethod
     def apply_single(i, target, kwargs):

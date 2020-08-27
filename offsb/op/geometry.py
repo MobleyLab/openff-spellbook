@@ -2,13 +2,13 @@ import treedi.tree
 import numpy as np
 from abc import (ABC, abstractmethod)
 import logging
-
-logger = logging.getLogger("GeometryOperation")
+from offsb.tools.util import flatten_list
+import offsb.rdutil.mol
 
 class GeometryOperation(treedi.tree.TreeOperation, ABC):
 
-    def __init__( self, source, name):
-        super().__init__( source, name)
+    def __init__(self, source, name):
+        super().__init__(source, name)
         self._select="Molecule"
         self.processes=1
 
@@ -18,17 +18,60 @@ class GeometryOperation(treedi.tree.TreeOperation, ABC):
     def apply(self, targets=None):
         super().apply(self._select, targets=targets)
 
-    def _generate_apply_kwargs(self, i, target):
+    def _generate_apply_kwargs(self, i, target, kwargs={}):
         entry = self.source.source.node_iter_to_root(target, select="Entry")
         entry = next(entry)
+        entry_node = entry
+        entry_name = str(entry)
 
+        self.logger.debug("{}".format(entry_node))
+        entry = self.source.source.db[entry.payload]['data']
+        out_str = ""
+        CIEHMS = "canonical_isomeric_explicit_hydrogen_mapped_smiles"
+        smi = entry.attributes[CIEHMS]
+        if "initial_molecule" in entry.dict():
+            qcid = entry.dict()["initial_molecule"]
+        elif "initial_molecules" in entry.dict():
+            qcid = entry.dict()["initial_molecules"]
+        else:
+            out_str += "{:d} initial mol was empty: {:s}".format(i, str(qcid))
+            return {"error": out_str}
+
+        if isinstance(qcid, set):
+            qcid = list(qcid)
+        if isinstance(qcid, list):
+            qcid = str(qcid[0])
+
+        qcmolid = "QCM-" + qcid
+
+        if qcmolid not in self.source.source.db:
+            out_str += "{:d} initial mol was empty: {:s}".format(i, str(qcmolid))
+            return {"error": out_str}
+
+        if "data" in self.source.source.db.get(qcmolid):
+            qcmol = self.source.source.db.get(qcmolid).get("data")
+        else:
+            out_str += "{:d} initial mol was empty: {:s}".format(i, str(qcmolid))
+            return {"error": out_str}
+
+        mol = offsb.rdutil.mol.rdmol_from_smiles_and_qcmol(smi, qcmol)
+
+        map_idx = {a.GetIdx(): a.GetAtomMapNum() for a in mol.GetAtoms()}
+
+        if any([x == 0 for x in map_idx.values()]) and \
+           any([x != 0 for x in map_idx.values()]):
+            raise IndexError("Partial map index read; refuse to proceed")
+        
         mol = self.source.source.db[target.payload]['data']['geometry']
 
-        obj = self.source.db[self.source[entry.index].payload]
-        masks = obj["data"]
-        return {"masks": masks, "mol": mol, "name": self.name, "op": self.op,
-                "entry": str(entry)}
+        obj = self.source.db[entry_node.payload]
+        masks = flatten_list([x for x in obj["data"].values()], times=1)
+        self.logger.debug("Have masks {}".format(masks))
 
+
+
+        return {"masks": masks, "map_idx": map_idx, "mol": mol, "name": self.name, "op": self.op,
+                "entry": entry_name}
 
     @staticmethod
     def apply_single(i, target, kwargs=None):
@@ -47,19 +90,39 @@ class GeometryOperation(treedi.tree.TreeOperation, ABC):
         mol = kwargs['mol']
         op = kwargs['op']
         entry = kwargs['entry']
+        map_idx = kwargs['map_idx']
 
         ret = {}
         calcs = 0
+        out_str = ""
+        debug_str = ""
 
+        # need to map to chemical indices e.g. as the appear in cmiles
+        # and the symbols/geometry are based on the map
+        # for i in range(len(masks)):
+        #     masks[i] = tuple([map_idx[j] - 1 for j in masks[i]])
+
+        # breakpoint()
         for mask in masks:
+
+            if map_idx is not None:
+                mask_mapped = tuple([map_idx[i]-1 for i in mask])
             # mask = [i-1 for i in mask]
-            logger.debug("Measuring {} on entry {} molecule {}".format(
-                str(mask), entry, target.payload))
-            ret[tuple(mask)] = op(mol, mask)
-            calcs += 1
+            debug_str += "Measuring {} on entry {} molecule {}\n".format(
+                str(mask), entry, target.payload)
+            vals = None
+            try:
+                vals = op(mol, mask_mapped)
+                calcs += 1
+            except Exception as e:
+                out_str += "Calculation failed for" + str(target) + "\n"
+                out_str += "Error:\n" + str(e) + '\n'
+
+            ret[tuple(mask)] = vals
+            debug_str += "value for {}: {}\n".format(str(mask), vals)
 
         # out_str = "calculated: {}\n".format(calcs)
-        return {target.payload: None, "return": {target.payload: ret}}
+        return {target.payload: out_str, "debug": debug_str, "return": {target.payload: ret}}
 
     # def apply(self, targets=None, select="Molecule"):
     #     calcs = 0
@@ -263,12 +326,12 @@ class TorsionOperation(GeometryOperation):
 class ImproperTorsionOperation(GeometryOperation):
 
     def __init__( self, source, name):
-        super().__init__( source, name)
+        super().__init__(source, name)
 
     @staticmethod
     def measure(mol, idx):
         """calculates improper torsion of [i, center, j, k]"""
-        atoms = mol[ np.newaxis, :, :]
+        atoms = mol[np.newaxis, :, :]
         noncenter = [idx[0]]+idx[2:4]
         mags = np.linalg.norm(atoms[:,noncenter,:] - atoms[:,idx[1],:][:,np.newaxis,:], axis=2)
         atoms_trans = atoms - atoms[:,idx[1],:][:,np.newaxis,:]

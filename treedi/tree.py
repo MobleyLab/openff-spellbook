@@ -9,7 +9,13 @@ import pprint
 from treedi.node import Node
 from treedi.node import DIRTY
 from offsb.tools.util import flatten_list
+import logging
 
+import sys
+
+LOGSTDOUT = logging.StreamHandler(sys.stdout)
+FORMAT="[%(asctime)s] %(levelname)s <%(name)s::%(funcName)s>: %(message)s"
+logging.basicConfig(format=FORMAT)
 
 def link_iter_depth_first(t):
     for c in t.link.values():
@@ -36,6 +42,66 @@ def link_iter_to_root(t, select, state):
         yield from link_iter_to_root(t.source, select, state)
 
 
+class DatabaseKeyCollisionException:
+    pass
+
+class DebugDict(dict):
+
+    # level = logging.DEBUG
+    # level = logging.INFO
+    def __init__(self, *args, **kwargs):
+
+        super().__init__(*args, **kwargs)
+
+    def getLogger(self):
+        if not (hasattr(self, "_logger") and self._logger is not None):
+            self._logger = logging.getLogger("{}".format(id(self)))
+            self._logger.addHandler(LOGSTDOUT)
+            self._logger.setLevel(level=logging.DEBUG)
+            self._logger.debug("DebugDict online")
+
+
+    def __setitem__(self, k, v):
+        if LOG:
+            self.getLogger()
+            v0 = super().get(k, None)
+            if v0 is not None:
+                self._logger.debug("DBSWP {} KEY {} FROM {} TO {}".format(id(self), k, v0, v))
+                if DBSWP_IS_FATAL:
+                    raise DatabaseKeyCollisionException()
+            else:
+                self._logger.debug("DBPUT {} KEY {} VAL {}".format(id(self), k, v))
+        super().__setitem__(k, v)
+
+    def __getitem__(self, k):
+        if LOG:
+            self.getLogger()
+        try:
+            v = super().__getitem__(k)
+        except KeyError as e:
+            if LOG:
+                self._logger.debug("DBGET {} KEY {} KeyError".format(id(self), k))
+            raise
+        if LOG:
+            self._logger.debug("DBGET {} KEY {} VAL {}".format(id(self), k, v))
+        return v
+
+    def get(self, k):
+        v = super().get(k)
+        if LOG:
+            self.getLogger()
+            self._logger.debug("DBGET {} KEY {} VAL {}".format(id(self), k, v))
+        return v
+
+LOG = False
+DBSWP_IS_FATAL = False
+#TREELOGLEVEL = logging.DEBUG
+TREELOGLEVEL = logging.INFO
+
+DEFAULT_DB=dict
+#DEFAULT_DB=DebugDict
+
+
 class Tree(ABC):
     index = 0
     """ 
@@ -51,8 +117,7 @@ class Tree(ABC):
         if db is not None:
             self.db = db
         else:
-            self.db = dict()
-        print("Tree database using type", type(self.db))
+            self.db = DEFAULT_DB()
 
         if root_payload is not None:
             ROOT = "ROOT"
@@ -66,10 +131,11 @@ class Tree(ABC):
             self.node_index = {root.index: root}
         elif node_index is not None:
             self.node_index = node_index
+            self.root_index = self.source.root_index
         else:
-            self.node_index = dict()
+            self.node_index = DEFAULT_DB()
 
-        self.processes = 8
+        self.processes = 1
         self.link = {}
         self.name = name
         self.modified = set()
@@ -88,6 +154,12 @@ class Tree(ABC):
         self.n_nodes = len(self.node_index)
         # self.root = None if self.n_levels == 0 else get_root( list(nodes.values())[0])
         self.ID = ".".join([self.index, self.name])
+
+        self.logger = logging.getLogger("{}::{}".format(str(type(self)), self.ID)) 
+        self.logger.addHandler(LOGSTDOUT)
+        self.logger.setLevel(level=TREELOGLEVEL)
+        self.logger.debug("Tree online")
+        self.logger.info("Tree database is {}".format(str(type(self.db))))
 
     def to_pickle(self, db=True, index=True, name=None):
 
@@ -314,7 +386,6 @@ class PartitionTree(Tree):
         self.source = source_tree
 
         self.verbose = True
-        print("Building PartitionTree", name)
         # nodes = {node.index: node for node in [node.skel() for node in source_tree.node_index.values()]}
         # self.node_index = source_tree.node_index
         # for node in nodes.values():
@@ -327,6 +398,7 @@ class PartitionTree(Tree):
 
         #        node.add( v)
         super().__init__(node_index=source_tree.node_index, name=name)
+        self.logger.debug("Building PartitionTree {}".format(name))
         # [self.register_modified(node) for node in self.node_index.values()]
         # source_tree.link_tree(self)
 
@@ -389,6 +461,7 @@ class PartitionTree(Tree):
 class TreeOperation(PartitionTree):
     def __init__(self, source_tree, name):
         super().__init__(source_tree, name)
+        self.logger.debug("This tree is TreeOperation")
 
     @abstractmethod
     def op(self, node, partition):
@@ -399,7 +472,7 @@ class TreeOperation(PartitionTree):
         pass
 
     @abstractmethod
-    def _generate_apply_kwargs(self, i, target):
+    def _generate_apply_kwargs(self, i, target, kwargs={}):
         pass
 
     def _apply_initialize(self, targets):
@@ -409,17 +482,20 @@ class TreeOperation(PartitionTree):
         pass
 
     def _print_result(self, n, n_targets, tgt, ret):
-        print(n, "/", n_targets, tgt)
-        if ret is not None:
-            for line in ret:
-                print(line, end="")
+        print("{:d} / {:d} {:s}".format(n, n_targets, str(tgt)))
+        if ret is not None and ret != "":
+            self.logger.info(ret)
 
     def _unpack_result_common(self, val, n, n_targets):
         for tgt, ret in val.items():
             if tgt == "return":
                 self._unpack_result(ret)
-            elif self.verbose:
+            elif self.verbose and tgt != "debug":
                 self._print_result(n, n_targets, tgt, ret)
+            if tgt == "debug":
+                if ret != "":
+                    self.logger.debug(ret)
+                
 
     def _unpack_work(self, work, exceptions_are_fatal=True):
 
@@ -431,11 +507,12 @@ class TreeOperation(PartitionTree):
                 try:
                     val = future.result()
                 except RuntimeError as e:
-                    print("RUNTIME ERROR; race condition??", e)
+                    self.logger.error("RUNTIME ERROR; race condition??")
+                    self.logger.error(str(e))
                     if exceptions_are_fatal:
                         raise
             if val is None:
-                print("data is None?!?")
+                self.logger.info("data is None?!?")
                 continue
 
             self._unpack_result_common(val, n, n_work)
@@ -455,7 +532,8 @@ class TreeOperation(PartitionTree):
 
             self._unpack_work(work)
         except Exception as e:
-            print("Exception!", e)
+            self.logging.error("Exception!")
+            self.logging.error(e)
             [job.cancel() for job in work]
             exe.shutdown(wait=False)
         else:
@@ -470,7 +548,7 @@ class TreeOperation(PartitionTree):
         elif not hasattr(targets, "__iter__"):
             targets = [targets]
 
-        # since we can only operate on self._select, force
+        # since we can only operate on self._select, force it
         targets = flatten_list(
             [
                 self.source.source.node_iter_depth_first(x, select=select)
@@ -491,7 +569,9 @@ class TreeOperation(PartitionTree):
         elif self.processes == 1:
 
             for n, target in enumerate(targets, 1):
-                kwargs = self._generate_apply_kwargs(n, target)
+                o = str(target)
+                self.logger.debug("Begin processing target {}".format(o))
+                kwargs = self._generate_apply_kwargs(n, target, kwargs=DEFAULT_DB())
                 val = self.apply_single(n, target, kwargs)
                 self._unpack_result_common(val, n, n_targets)
 

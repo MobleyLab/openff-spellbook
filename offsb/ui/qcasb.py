@@ -1,4 +1,3 @@
-
 import offsb
 import offsb.qcarchive.qcatree as qca
 import qcportal as ptl
@@ -194,6 +193,100 @@ class QCArchiveSpellBook():
 
     def error_report_per_molecule(self):
         pass
+
+    def torsiondrive_groupby_openff_param(self, ffname, param):
+
+        """
+        Create torsiondrive summary plot of a parameter.
+        Should be able to detect type of measurement from param type
+            Downloads data
+            Downloads min torsion molecules
+            Creates the appropriate ff-label command
+            Creates the appropriate measure command from ff indices
+            Aggregates data
+            Sorts in a reasonable format
+            Save as file (plot using something else)
+        """
+        pass
+
+    #def collate_1d_torsiondrive(self, entry_data=[], molecule_data=[],
+    #    targets=None, out_fname=None):
+
+    #    # take a dict, with keys as filename pickles
+    #    # then either Entry, Molecule, etc
+    #    # then Any other key
+    #    # therefore, this is a projection, and arg should be a list of keys
+        
+    #    if targets is None:
+    #        targets = self.QCA.iter_entry()
+    #    f = open("out.dat", 'w')
+    #    for i,entry_node in enumerate(targets):
+    #        key = entry_node.payload
+    #        params = labels.db[key]['data']
+    #        if "Bonds" not in params:
+    #            print(i, entry_node, "Missing labels")
+    #            continue
+    #        all_params = params['Bonds']
+    #        for mol_node in self.QCA.node_iter_depth_first(entry_node, select="Molecule"):
+    #            constr = [x.payload for x in self.QCA.node_iter_to_root(mol_node, select="Constraint")]
+    #            mol_key = mol_node.payload
+    #            mol = self.QCA.db[mol_key]
+    #            bond_vals = bonds.db[mol_key]
+    #            for atom_key, lbl in all_params.items():
+    #                #if atom_key not in bond_vals:
+    #                #    atom_key = tuple(atom_key[::-1])
+    #                try:
+    #                    # print(i, entry_node, constr, atom_key, bond_vals[atom_key], lbl)
+    #                    f.write("{} {} {} {} {} {}\n".format(i, constr[0][2], atom_key[0], atom_key[1], bond_vals[atom_key][0], lbl))
+    #                except Exception as e:
+    #                    print(self.QCA.db[key])
+    #                    print(entry_node,lbl) print(bond_vals)
+    #                    print(all_params)
+    #                    print(mol_node, mol_key)
+    #                    print(e)
+    #                    print(i)
+    #                    raise
+    #    f.close()
+
+    
+    def assign_labels_from_openff(self, openff_name, name):
+        from offsb.op.openforcefield import OpenForceFieldTree as OP
+        ext = ".offxml"
+        if not openff_name.endswith(ext):
+            openff_name += ext
+        labeler = OP(self.QCA, name, openff_name)
+        labeler.apply()
+        labeler.to_pickle()
+
+    def _measure(self, smi, op_cls, name):
+        from offsb.search.smiles import SmilesSearchTree
+
+        # assume we want all final geometries
+        self.QCA.cache_optimization_minimum_molecules()
+
+        query = SmilesSearchTree(smi, self.QCA, "query")
+        query.apply()
+
+        op = op_cls(query, name)
+        op.apply()
+        op.to_pickle()
+
+    def measure_bonds(self, name):
+        from offsb.op.geometry import BondOperation as OP
+        self._measure("[*]~[*]", OP, name)
+
+    def measure_angles(self, name):
+        from offsb.op.geometry import AngleOperation as OP
+        self._measure("[*]~[*]~[*]", OP, name)
+
+    def measure_dihedrals(self, name):
+        from offsb.op.geometry import TorsionOperation as OP
+        self._measure("[*]~[*]~[*]~[*]", OP, name)
+
+    def measure_outofplanes(self, name):
+        from offsb.op.geometry import ImproperTorsionOperation as OP
+        self._measure("[*]~[*](~[*])~[*]", OP, name)
+
 
     def error_report_per_dataset(self, save_xyz=True, out_fnm=None, full_report=False):
         if out_fnm is None:
