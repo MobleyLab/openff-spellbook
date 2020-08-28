@@ -5,6 +5,11 @@ import qcfractal.interface as ptl
 import os
 import sys
 import pickle
+import numpy as np
+import json
+import re
+import simtk.unit
+from openmmtools.utils import quantity_from_string
 
 def load_dataset_input(fnm):
     datasets = [tuple([line.split()[0]," ".join(line.strip('\n').split()[1:])])
@@ -159,6 +164,19 @@ class QCArchiveSpellBook():
             self.load(aux_sets, load_all=load_all)
         self.folder_cache = {}
 
+        # If data is generated for a parameters, save the list later
+        # in case we will e.g. plot them
+        self._param_cache = []
+
+    def _plot_kt_displacements(self, ax, val, delta, marker='o', color='black', label=None):
+
+        ax.axhline(y=val, ls='-', marker=marker, color='black', ms=12,
+            mec='black', mfc=color,  label=label)
+        ax.axhline(y=val+delta, ls='--', marker=marker, color='black', ms=6,
+            mec='black', mfc=color)
+        ax.axhline(y=val-delta, ls='--', marker=marker, color='black', ms=6,
+            mec='black', mfc=color)
+
     def energy_minimum_per_molecule(self):
 
         print("Reporting final optimization energies per molecule")
@@ -194,7 +212,172 @@ class QCArchiveSpellBook():
     def error_report_per_molecule(self):
         pass
 
-    def torsiondrive_groupby_openff_param(self, ffname, param):
+            
+    def _apply_kt_plots(self, meta, ax, ax2, kwargs):
+
+        if meta['param']['id'][0] in 'ait':
+            equil_key = 'angle'
+        elif meta['param']['id'][0] in 'b':
+            equil_key = 'length'
+        else:
+            raise Exception("Could not parse param metadata")
+
+        kT = simtk.unit.Quantity(.001987*298.15,simtk.unit.kilocalorie_per_mole)
+
+        k = quantity_from_string(meta['param']['k'])
+        if equil_key == 'angle' and 'radian' in str(k.unit):
+            k = k.in_units_of(k.unit * simtk.unit.radian**2 / simtk.unit.degree**2) 
+        equil = quantity_from_string(meta['param'][equil_key])
+        delta = (2*(kT)/k)**.5
+
+        val = equil / equil.unit
+        delta = delta/delta.unit
+        self._plot_kt_displacements(ax, val, delta, **kwargs)
+        self._plot_kt_displacements(ax2, val, delta, **kwargs)
+
+        label_unit_map = {
+            "angstrom": r"$\mathrm{\AA}$",
+            "degree": r"deg"
+        }
+
+        label_unit = label_unit_map[str(equil.unit)]
+
+        return label_unit
+
+    def plot_torsiondrive_groupby_openff_param(self, infile, oldparamfile=None):
+
+        import matplotlib.pyplot as plt
+        import matplotlib as mpl
+
+        # TODO: make the fancier multirow plots
+        rows=1
+
+        meta = {}
+
+        mpl.rc("font", **{"size":13})
+
+        files = []
+        old_files = []
+        if os.path.exists(infile):
+            files = [infile]
+            if oldparamfile is None:
+                oldfiles = [None]
+            else:
+                old_files = [oldparamfile]
+        elif len(self._param_cache) > 0:
+            for param in self._param_cache:
+                filename = ".".join([infile, param, "csv"])
+                if os.path.exists(filename):
+                    files.append(filename)
+                else:
+                    print("Param", param, "is cached, but no data found.")
+                    continue
+                if oldparamfile is None:
+                    old_files.append(None)
+                else:
+                    filename = ".".join([oldparamfile, param, "csv"])
+                    if os.path.exists(filename):
+                        old_files.append(filename)
+                    else:
+                        print("Param", param, "is cached, but no data found for previous.")
+
+        for i, (file, oldfile) in enumerate(zip(files, old_files)):
+
+            with open(file) as f:
+                for line in f:
+                    tokens = line.split()
+                    if tokens[0] != "#JSON":
+                        break
+                    name = tokens[1]
+                    js = "".join(tokens[2:])
+                    meta[name] = json.loads(js)
+                
+            dat = np.loadtxt(file)
+
+            oldmeta = None
+
+            if oldfile is not None:
+                oldmeta = {}
+                with open(oldfile) as f:
+                    for line in f:
+                        tokens = line.split()
+                        if tokens[0] != "#JSON":
+                            break
+                        name = tokens[1]
+                        js = "".join(tokens[2:])
+                        oldmeta[name] = json.loads(js)
+
+
+            fig = plt.figure(figsize=(6,4), dpi=300)
+            fig.subplots_adjust(wspace=0.0, hspace=.25, right=.95, left=0.15,
+                bottom=.15)
+
+            ax = plt.subplot2grid((1,3),(0,0), colspan=2)
+            ax2 = plt.subplot2grid((1,3),(0,2), sharey=ax)
+
+
+            color='black'
+            entries = list(set(dat[:,0]))
+            for entry in entries:
+                mol = dat[dat[:,0] == entry]
+                params = set(list(mol[:,2]))
+                for param in params:
+                    data = mol[mol[:,2] == param]
+                    x = data[:,1]
+                    y = data[:,3]
+
+                    # The points
+                    ax.plot(x,y, lw=0.0, marker='.', color=color, ms=2, alpha=.8)
+
+                    # The lines
+                    ax.plot(x,y , lw=.1, ls='-', ms=0.0, color=color, alpha=.5)
+
+            # some hardcoding for b7 and doing a comparison... 
+            # TODO make config options for this
+            # ax.set_ylim(1.42,1.56)
+
+            ax2.hist(dat[:,3], orientation='horizontal', color=color,
+                    histtype='stepfilled', alpha=.3, bins=30)
+            ax2.hist(dat[:,3], orientation='horizontal', color=color,
+                    histtype='step', lw=2, bins=30)
+            ax2.tick_params(labelleft=False, direction='inout')
+
+
+            if oldmeta is not None:
+                kwargs = dict(color='red', marker='s', label="Initial")
+                self._apply_kt_plots(oldmeta, ax, ax2, kwargs)
+
+            color = 'black' if oldmeta is None else 'green'
+            kwargs = dict(color=color, label="Final")
+            label_unit = self._apply_kt_plots(meta, ax, ax2, kwargs)
+
+            ax.set_xlabel("Angle (deg)")
+            ax.set_ylabel("Measurement ("+label_unit+")")
+            ax2.set_xlabel("Count")
+            t= "Parameter " + meta['param']['id'] + " " + meta['param']['smirks']
+            fig.suptitle(t, fontsize=11)
+
+            if oldmeta is not None:
+                ax2.legend(frameon=True, loc='upper right')
+
+            prefix = infile.split('.')
+            if len(prefix[-1]) == 3 or len(prefix[-1]) == 4:
+                prefix = prefix[:-1]
+            if oldmeta is not None:
+                compare_from = os.path.basename(oldparamfile).split(".")
+                # weird hack to make sure that the extension is actually
+                # extension. Sometimes we give extensionless prefix names
+                # so stripping the extension is not wanted
+                if len(compare_from[-1]) == 3 or len(compare_from[-1]) == 4:
+                    compare_from = compare_from[:-1]
+                prefix += ["from_" + ".".join(compare_from)]
+            figname = ".".join(prefix + ["td_groupby",meta['param']['id'],"png"])
+            fig.savefig(figname)
+            print(i, "/", len(files), "Saved image", figname) 
+            plt.close(fig)
+
+    def torsiondrive_groupby_openff_param(self, ffname, param,
+        energy="None", out_fname=None, collapse_atom_tuples=True):
 
         """
         Create torsiondrive summary plot of a parameter.
@@ -207,7 +390,149 @@ class QCArchiveSpellBook():
             Sorts in a reasonable format
             Save as file (plot using something else)
         """
-        pass
+
+        valence_types = {
+            "n": "vdW",
+            "b": "Bonds",
+            "a": "Angles",
+            "t": "ProperTorsions",
+            "i": "ImproperTorsions"
+        }
+
+        valence_measures = {
+            "b": self.measure_bonds,
+            "a": self.measure_angles,
+            "t": self.measure_dihedrals,
+            "i": self.measure_outofplanes
+        }
+
+        convert_map = {
+            "b": offsb.tools.const.bohr2angstrom,
+            "a": 1.0,
+            "t": 1.0,
+            "i": 1.0,
+        }
+
+        param_code = param[0]
+
+        convert = convert_map[param_code]
+
+        valence_type = valence_types[param_code]
+        measure_fn = valence_measures[param_code]
+
+        op = measure_fn(valence_type)
+        labeler = self.assign_labels_from_openff(ffname, ffname)
+
+        newmols = self.QCA.cache_torsiondriverecord_minimum_molecules()
+        if newmols > 0:
+            self.QCA.to_pickle()
+
+        param_records = {}
+
+        param_list = list(labeler.db['ROOT']['data'][valence_type].keys())
+
+        if param[1] != '*':
+            if param not in param_list:
+                raise Exception ("Parameter not found")
+            param_list = [param]
+
+        warned = False
+        warned_once = False
+        for pi, param in enumerate(param_list):
+
+            filename = ".".join([out_fname, param, "csv"])
+            if out_fname is not None:
+                f = open(filename, 'w')
+            else:
+                f = sys.stdout
+
+            records = []
+            param_metadata = labeler.db['ROOT']['data'][valence_type][param]
+
+
+            param_keys = list(param_metadata.keys())
+            for pkey in param_keys:
+                value = param_metadata[pkey]
+                if type(value) == simtk.unit.Quantity:
+                    value = str(value / value.unit) + " * " + str(value.unit)
+                param_metadata[pkey] = value
+            f.write("#JSON param {}\n".format(json.dumps(param_metadata))) 
+
+            f.write('#JSON header {"col_names":["entry_id", "angle", "param_id", "value_in_AKMA"]}\n')
+
+            td_list = self.QCA.node_iter_depth_first(
+                self.QCA.root(), select="TorsionDrive")
+
+
+            for i,td_node in enumerate(td_list):
+
+                entry_node = next(self.QCA.node_iter_to_root(
+                    td_node, select="Entry"))
+
+                key = entry_node.payload
+                params = labeler.db[key]['data']
+
+                if valence_type not in params:
+                    if not warned:
+                        print(i, entry_node, "Missing labels")
+                    warned_once = True
+                    continue
+                if param not in self._param_cache:
+                    self._param_cache.append(param)
+
+                all_params = params[valence_type]
+
+                mol_nds = self.QCA.node_iter_torsiondriverecord_minimum(
+                    entry_node, select="Molecule")
+
+                for mol_node in mol_nds:
+
+                    constr = [x.payload for x in self.QCA.node_iter_to_root(
+                        mol_node, select="Constraint")]
+
+                    if len(constr) > 1:
+                        raise Exception("Only 1d torsionscans supported")
+
+                    angle = constr[0][2]
+                    mol_key = mol_node.payload
+
+                    mol = self.QCA.db[mol_key]
+                    op_vals = op.db[mol_key]
+
+
+
+                    map_idx = {}
+                    used_indices = {}
+                    for atom_key, lbl in all_params.items():
+                        if lbl != param:
+                            continue
+                        if collapse_atom_tuples:
+                            if lbl not in used_indices:
+                                used_indices[lbl] = {}
+                                map_idx[lbl] = 0
+                            if atom_key not in used_indices[lbl]:
+                                used_indices[lbl][atom_key] = map_idx[lbl]
+                                map_idx[lbl] += 1
+                            atom_key_id = used_indices[lbl][atom_key]
+                        else:
+                            atom_key_id = atom_key
+
+                        val = op_vals[atom_key][0] * convert
+                        rec = [i, angle, atom_key_id, val]
+                        records.append(rec)
+                        # print(rec)
+                        f.write("{:6d} {:7.2f} {} {:12.8f}\n".format(*rec))
+
+            param_records[param] = records
+            if f != sys.stdout:
+                print(pi, len(param_list), "Wrote datafile for", param, filename)
+                f.close()
+
+            if warned_once:
+                warned = True
+
+        return param_records
+
 
     #def collate_1d_torsiondrive(self, entry_data=[], molecule_data=[],
     #    targets=None, out_fname=None):
@@ -250,6 +575,10 @@ class QCArchiveSpellBook():
 
     
     def assign_labels_from_openff(self, openff_name, name):
+
+        if os.path.exists(name + ".p"):
+            return pickle.load(open(name + ".p", 'rb'))
+
         from offsb.op.openforcefield import OpenForceFieldTree as OP
         ext = ".offxml"
         if not openff_name.endswith(ext):
@@ -257,9 +586,13 @@ class QCArchiveSpellBook():
         labeler = OP(self.QCA, name, openff_name)
         labeler.apply()
         labeler.to_pickle()
+        return labeler
 
     def _measure(self, smi, op_cls, name):
         from offsb.search.smiles import SmilesSearchTree
+
+        if os.path.exists(name + ".p"):
+            return pickle.load(open(name + ".p", 'rb'))
 
         # assume we want all final geometries
         self.QCA.cache_optimization_minimum_molecules()
@@ -270,22 +603,23 @@ class QCArchiveSpellBook():
         op = op_cls(query, name)
         op.apply()
         op.to_pickle()
+        return op
 
     def measure_bonds(self, name):
         from offsb.op.geometry import BondOperation as OP
-        self._measure("[*]~[*]", OP, name)
+        return self._measure("[*]~[*]", OP, name)
 
     def measure_angles(self, name):
         from offsb.op.geometry import AngleOperation as OP
-        self._measure("[*]~[*]~[*]", OP, name)
+        return self._measure("[*]~[*]~[*]", OP, name)
 
     def measure_dihedrals(self, name):
         from offsb.op.geometry import TorsionOperation as OP
-        self._measure("[*]~[*]~[*]~[*]", OP, name)
+        return self._measure("[*]~[*]~[*]~[*]", OP, name)
 
     def measure_outofplanes(self, name):
         from offsb.op.geometry import ImproperTorsionOperation as OP
-        self._measure("[*]~[*](~[*])~[*]", OP, name)
+        return self._measure("[*]~[*](~[*])~[*]", OP, name)
 
 
     def error_report_per_dataset(self, save_xyz=True, out_fnm=None, full_report=False):

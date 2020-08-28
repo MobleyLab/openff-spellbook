@@ -44,16 +44,22 @@ class OpenForceFieldTreeBase(treedi.tree.TreeOperation, abc.ABC):
                 filename += ext
             self.filename = filename
 
-            for entry_point in iter_entry_points(
+            found = False
+            for entry_point in ['.'] + list(iter_entry_points(
                 group="openforcefield.smirnoff_forcefield_directory"
-            ):
-                pth = entry_point.load()()[0]
+            )):
+                if type(entry_point) == str:
+                    pth = entry_point
+                else:
+                    pth = entry_point.load()()[0]
                 abspth = os.path.join(pth, filename)
                 print("Searching", abspth)
                 if os.path.exists(abspth):
                     self.abs_path = abspth
                     print("Found")
+                    found = True
                     break
+            if not found:
                 raise Exception("Forcefield could not be found")
             self.forcefield = oFF.typing.engines.smirnoff.ForceField(
                 self.abs_path, disable_version_check=True
@@ -429,7 +435,9 @@ class OpenForceFieldTree(OpenForceFieldTreeBase):
             self.db[root.payload] = DEFAULT_DB()
 
         for k,v in ret[2].items():
-            self.db[root.payload]['data'][k] = DEFAULT_DB(v)
+            if k not in self.db[root.payload]['data']:
+                self.db[root.payload]['data'][k] = DEFAULT_DB()
+            self.db[root.payload]['data'][k].update(v)
 
     def _generate_apply_kwargs(self, i, target, kwargs={}):
         """

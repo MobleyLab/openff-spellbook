@@ -257,7 +257,7 @@ class QCATree( Tree.Tree):
         if tdr_nodes is None:
             tdr_nodes = self.iter_entry( select="TorsionDrive")
         fn = __class__.node_iter_torsiondriverecord_minimum
-        self.cache_minimum_molecules( tdr_nodes, fn)
+        return self.cache_minimum_molecules( tdr_nodes, fn)
 
     def cache_final_molecules( self, nodes=None):
         """
@@ -341,7 +341,7 @@ class QCATree( Tree.Tree):
                 mols.pop(top_node.index)
         if len(mols) == 0:
             print("No molecules found")
-            return
+            return 0
 
         mol_ids_flat = flatten_list([x for x in mols.values()], -1)
         client = self.db["ROOT"]["data"]
@@ -363,6 +363,7 @@ class QCATree( Tree.Tree):
                 node.name = "Molecule"
                 node.stamp = datetime.now()
                 self.register_modified(node, state=Node.CLEAN)
+        return len(mol_ids_flat)
 
     def cache_hessians( self, nodes):
         self.cache_results( nodes, select="HessianStub")
@@ -409,7 +410,7 @@ class QCATree( Tree.Tree):
         if nodes is None:
             nodes = [self.root()]
         fn = __class__.node_iter_optimization_minimum
-        self.cache_minimum_molecules( nodes, fn)
+        return self.cache_minimum_molecules( nodes, fn)
 
     def batch_download_hessian_parallel( self, full_ids, fn, max_query=1000, projection=None):
         import math
@@ -1163,20 +1164,29 @@ class QCATree( Tree.Tree):
         return hits
 
     def node_iter_torsiondriverecord_minimum(self, tdr_nodes=None, select=None,
-            fn=Tree.Tree.node_iter_depth_first):
+            sort=True, fn=Tree.Tree.node_iter_depth_first):
         if tdr_nodes is None:
             tdr_nodes = [n for n in self.node_iter_breadth_first(
                 self.root(), select="TorsionDrive")]
         if not hasattr(tdr_nodes, "__iter__"):
             tdr_nodes = [tdr_nodes]
+
         tdr_nodes = flatten_list(
-            [self.node_iter_depth_first(x, select="TorsionDrive") for x in tdr_nodes])
+            [self.node_iter_depth_first(x, select="TorsionDrive")
+                for x in tdr_nodes])
+
         for tdr_node in tdr_nodes:
 
             tdr = self.db[tdr_node.payload]["data"]
             minimum_positions = tdr['minimum_positions']
             opt_hist = tdr['optimization_history']
-            for constraint_nid in tdr_node.children:
+
+            cids = tdr_node.children
+            if sort:
+                cids = sorted(tdr_node.children,
+                    key=lambda i: self[i].payload[2])
+
+            for constraint_nid in cids:
                 constraint_node = self[constraint_nid]
                 point = '[' + str(constraint_node.payload[2]) + "]"
                 if point not in minimum_positions:
