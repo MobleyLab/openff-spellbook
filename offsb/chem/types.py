@@ -4,15 +4,17 @@ import itertools as it
 import abc
 import re
 import numpy as np
+from typing import List
 
 class ChemTypeComparisonException(Exception):
     pass
 
 class BitVec:
     
+    __slots__ = ["_v", "_inv"]
+    
     def __init__(self, vals=None, inv=False):
 
-        self.__slots__ = ["_v", "_inv"]
         if vals is None:
             self._v = np.array([False], dtype=bool)
         else:
@@ -351,7 +353,7 @@ class ChemType(abc.ABC):
         # negation (not a)
 
         ret = []
-        for field in a._fields:
+        for field in self._fields:
             a_vec:BitVec = getattr(self, field)
             a_vec = ~a_vec.copy()
             ret.append(a_vec)
@@ -397,6 +399,8 @@ class ChemType(abc.ABC):
         a, b = self.reduce_longest(o)
         return a != b
 
+class AtomTypeInvalidException(Exception): pass
+
 class AtomType(ChemType):
     """
     """
@@ -407,7 +411,7 @@ class AtomType(ChemType):
         """
         """
 
-        self._fields = ["_symbol", "_X", "_x", "_H", "_r", "_aA"]
+        self._fields = ["_symbol","_H", "_X", "_x", "_r", "_aA"]
         # these are string bitfields, "" means Null
         if symbol is None:
             symbol = BitVec()
@@ -450,6 +454,38 @@ class AtomType(ChemType):
         cls._H = H
         cls._r = r
         cls._aA = aA
+        return cls
+
+    @classmethod
+    def from_ints(cls, data, inv:bool=False):
+        """
+        """
+
+        cls = cls()
+        vec = BitVec()
+        vec[data['S']] = True
+        cls._symbol = vec.copy()
+
+        vec = BitVec()
+        vec[data['X']] = True
+        cls._X = vec.copy()
+
+        vec = BitVec()
+        vec[data['x']] = True
+        cls._x = vec.copy()
+
+        vec = BitVec()
+        vec[data['H']] = True
+        cls._H = vec.copy()
+
+        vec = BitVec()
+        vec[data['r']] = True
+        cls._r = vec.copy()
+
+        vec = BitVec()
+        vec[data['aA']] = True
+        cls._aA = vec.copy()
+
         return cls
 
     @classmethod
@@ -516,8 +552,230 @@ class AtomType(ChemType):
         return self.from_data(symbol, X, x, H, r, aA)
 
     def __repr__(self):
-        return "Syms: {} H: {} X: {} x: {} r: {} aA: {} Invert: {}".format(
-            self._symbol, self._H, self._X, self._x, self._r, self._aA, self.inv)
+        return "Syms: {} H: {} X: {} x: {} r: {} aA: {}".format(
+            self._symbol, self._H, self._X, self._x, self._r, self._aA)
+
+    def to_primitives(self):
+        if self.is_null():
+            raise AtomTypeInvalidException("Cannot convert to SMARTS since definition does not completely describe a full primitive")
+        pass
+        
+    def _recurse_fields(self, fields, pos=[]):
+
+        if len(pos) == len(fields):
+            ret = [field[i] for field,i in zip(fields,pos)]
+            dat = {"S": pos[0],
+                   "H": pos[1],
+                   "X": pos[2],
+                   "x": pos[3],
+                   "r": pos[4],
+                   "aA": pos[5]
+            }
+            if all(ret) and valid_atom(AtomType.from_ints(dat)):
+                yield pos.copy()
+            return
+            # return [field[i] for field,i in zip(fields,pos)]
+        l = len(pos)
+        pos.append(0)
+        # print("field", l+1, "/", len(fields), "has length", len(fields[l]))
+        for i in range(len(fields[l])):
+            pos[-1] = i
+            # print("querying", i)
+            yield from self._recurse_fields(fields,pos=pos.copy())
+
+    def to_smarts(self, bond_limit=4):
+        if self.is_null():
+            raise AtomTypeInvalidException("Cannot convert to SMARTS since definition does not completely describe a full primitive")
+        """
+        my order is S, H, X, r, aA
+        """
+
+        terms = list()
+        breakpoint()
+        vals = [x for x in self._recurse_fields([getattr(self, field) for field in self._fields],pos=[])]
+        for line in vals:
+            rstr = "!r" if line[-2] == 0 else "r{}".format(line[-2]+2) 
+            aA = "a" if line[-1] == 0 else "A"
+            term = "[#{}H{}X{}x{}{}{}]".format(*line[:-2], rstr, aA)
+
+            if line[2] != 4:
+                print("SKIPPED", term)
+                continue
+            terms.append(term)
+        print(self._fields)
+            
+        return terms
+
+
+def valid_atom(atom:AtomType) -> bool:
+
+    sym = len(atom._symbol) - 1
+    H = len(atom._H) - 1
+    x = len(atom._x) - 1
+    X = len(atom._X) - 1
+    r = len(atom._r) - 1
+
+    # if X0 or X1, then can't be in a ring
+    if X < 3 and r > 1:
+        return False
+
+    # The sum of H and x must be <= X
+    if X < x + H:
+        return
+
+    # Everything else is acceptable?
+    return not atom.is_null()
+
+def next_bond_def(atom:AtomType, fix=None) -> AtomType:
+    """
+    Generate a +1 step in bond def, that will produce a valid atom
+    fix determines what cannot be changed in the operation
+    """
+    return atom.copy()
+
+def prev_bond_def(atom:AtomType, fix=None) -> AtomType:
+    """
+    Generate a +1 step in bond def, that will produce a valid atom
+    fix determines what cannot be changed in the operation
+    """
+    return atom.copy()
+
+
+    return True
+
+
+    
+def iterate_atom_connections(fix:dict={}, init:dict={}, direction=1,
+    order=['S','X','r','x','H']):
+    """
+    rules:
+    x + H <= X
+    if x == 0, r == 0
+    if X < 2, x == 0
+    
+    # if x > 1, r == unbound # no constraint
+    if X >= 2 x == unbound # no constraint
+
+    """
+    # X = fix.get("X", 2)
+
+    # rmax = 8
+    # Sallowed = [1,6,7,8]
+
+    # rrange = [init.get("r", 0), rmax - init.get("r", 0)]
+    # xrange = [init.get("x", 0), X]
+    # Hrange = [init.get("H", 0), X]
+    # Xrange = [init.get("X", 0), X]
+
+    # Srange = [init.get("S", Sallowed[0]), Sallowed[-1]]
+    # # Srange = [s for s in range(Srange[0], Srange[1] + 1) if s in Sallowed]
+
+    # if direction == -1:
+    #     rrange = rrange[::-1]
+    #     xrange = xrange[::-1]
+    #     Hrange = Hrange[::-1]
+    #     Xrange = Xrange[::-1]
+    #     Srange = Srange[::-1]
+
+    # def next_S(S, X, r, x, H, direction=1, allowed=[1,6,7,8]):
+    #     S = S + 1 if direction > 0 else S - 1
+    #     if S > 0 and S in allowed:
+    #         yield S
+
+    # def next_X(S, X, r, x, H, direction=1, max_val=4):
+    #     X = X + 1 if direction > 0 else X - 1
+    #     if X > 0 and X <= max_val:
+    #         yield X
+
+    # def next_r(S, X, r, x, H, direction=1):
+    #     r = r + 1 if direction > 0 else r - 1
+    #     if x + H <= X and r > 0:
+    #         yield r
+
+    # def next_x(S, X, r, x, H, direction=1):
+    #     x = x + 1 if direction > 0 else x - 1
+    #     if not (x == 0 and r > 0) and x > 0:
+    #         yield x
+
+    # def next_H(S, X, r, x, H, direction=1):
+    #     H = H + 1 if direction > 0 else r - 1
+    #     if x + H <= X and H > 0:
+    #         yield H
+        
+        
+    # vars = []
+    # table = []
+    # for o in order:
+    #     success = False
+    #     if o == 'S':
+    #         vars.append(Srange)
+    #         table.append(next_S)
+    #     elif o == 'X':
+    #         vars.append(Xrange)
+    #         table.append(next_X)
+    #     elif o == 'r':
+    #         vars.append(rrange)
+    #         table.append(next_r)
+    #     elif o == 'x':
+    #         vars.append(Hrange)
+    #         table.append(next_x)
+    #     elif o == 'H':
+    #         vars.append(Hrange)
+    #         table.append(next_H)
+
+    # terms = []
+    
+    # # vec = [next(fn(i)) for fn,x in zip(table, vars) for i in range(*x)]
+    # vec = [next(i) for var in vars for i in range(*var)]
+    # # make sure vec is valid
+    
+
+    # terms.append(vec)
+    # for i,var in enumerate(vars):
+    #     vec[i] = table[i](var)
+    #     terms.append()
+    # return terms
+
+    X = fix.get("X", 2)
+
+    rmax = 8
+    Sallowed = [1,6,7,8]
+
+    rrange = [init.get("r", 0), rmax - init.get("r", 0)]
+    xrange = [init.get("x", 0), X+1]
+    Hrange = [init.get("H", 0), X+1]
+    Xrange = [init.get("X", 0), X+1]
+
+    Srange = [init.get("S", Sallowed[0]), Sallowed[-1]]
+    Srange = [s for s in range(Srange[0], Srange[1] + 1) if s in Sallowed]
+
+    if direction == -1:
+        rrange = rrange[::-1]
+        xrange = xrange[::-1]
+        Hrange = Hrange[::-1]
+        Xrange = Xrange[::-1]
+        Srange = Srange[::-1]
+
+
+    terms = []
+    for S in Srange:
+        for H in range(*Hrange, direction):
+            for x in range(*xrange, direction):
+                for r in range(*rrange, direction):
+
+                    if x + H > X:
+                        continue
+                    # if x == 0 and r > 0:
+                    #     continue
+                    if r == 1 or r == 2:
+                        continue
+
+                    rstr = "!r" if r == 0 else "r{}".format(r) 
+                    term = "[#{}H{}X{}x{}{}a]".format(S, H, X, x, rstr)
+                    terms.append(term)
+                    term = "[#{}H{}X{}x{}{}A]".format(S, H, X, x, rstr)
+                    terms.append(term)
+    return terms
 
 class BondType(ChemType):
     """
@@ -571,8 +829,8 @@ class BondType(ChemType):
         return self.from_data(order, aA)
 
     def __repr__(self):
-        return "Order: {} aA: {} Invert: {}".format(
-            self._order, self._aA, self.inv)
+        return "Order: {} aA: {}".format(
+            self._order, self._aA)
 
     def bitwise_dispatch(self, order, aA, fn, inv=False):
         order = fn(self._order, order, inv)
@@ -870,3 +1128,45 @@ class OutOfPlaneGraph(DihedralGraph):
                 + self._bond3.__repr__() + "] (" \
                 + self._atom4.__repr__() + ")"
     
+
+# import functools
+
+# @functools.singledispatch
+# def AtomType_compare_valid(a, b):
+#     pass
+
+# class AtomNumber(int):
+#     pass
+
+# class AtomBondCountHeavyRegular(int):
+#     pass
+
+# class AtomBondCountAromatic(int):
+#     pass
+
+# class AtomBondCountHydrogen(int):
+#     pass
+
+# class AtomTypeIteratorConstraint(abc.ABC):
+    
+#     def __init__(self, atom:AtomType):
+#         self._atom = atom.copy()
+
+#     @abc.abstractmethod
+#     def __callable__(self) -> bool:
+#         pass
+        
+# class AtomTypeConstraintBondSum(AtomTypeIteratorConstraint):
+#     def __callable__(self):
+#         return True
+
+# class AtomTypeIterator():
+
+#     def __init__(self, atom:AtomType,
+#         constraints:List[AtomTypeIteratorConstraint]=[],
+#         direction:bool=True):
+
+#         self._contraints = constraints.copy()
+#         self._atom = atom.copy()
+#         self._direction = 1
+

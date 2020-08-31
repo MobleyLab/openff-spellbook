@@ -358,7 +358,13 @@ class QCArchiveSpellBook():
             fig.suptitle(t, fontsize=11)
 
             if oldmeta is not None:
-                ax2.legend(frameon=True, loc='upper right')
+                legend = ax2.legend(frameon=False, loc='upper right', markerscale=.7, fontsize=8)
+                # for mi in [0,1]:
+                #     m = legend.legendHandles[mi].get_markersize()
+                #     legend.legendHandles[mi].set_markersize(m)
+                # ax2.legend(handles=legend.legendHandles, frameon=False, loc='upper right')
+                # fig.canvas.draw()
+                # fig.canvas.flush_events()
 
             prefix = infile.split('.')
             if len(prefix[-1]) == 3 or len(prefix[-1]) == 4:
