@@ -270,7 +270,8 @@ class QCArchiveSpellBook():
                 if os.path.exists(filename):
                     files.append(filename)
                 else:
-                    print("Param", param, "is cached, but no data found.")
+                    o = "Param {} is cached, but datafile {} not found"
+                    print(o.format(param, filename))
                     continue
                 if oldparamfile is None:
                     old_files.append(None)
@@ -279,7 +280,8 @@ class QCArchiveSpellBook():
                     if os.path.exists(filename):
                         old_files.append(filename)
                     else:
-                        print("Param", param, "is cached, but no data found for previous.")
+                        o = "Param {} is cached, but previous datafile {} not found"
+                        print(o.format(param, filename))
 
         for i, (file, oldfile) in enumerate(zip(files, old_files)):
 
