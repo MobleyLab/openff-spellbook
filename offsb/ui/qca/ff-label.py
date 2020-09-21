@@ -12,7 +12,7 @@ if __name__ == "__main__":
     parser.add_argument('--out_file_name', type=str)
     parser.add_argument('--datasets', type=str)
 
-    args = parser.parse_args()
+    args = vars(parser.parse_args())
 
     datasets = None
     if args.datasets is not None:
