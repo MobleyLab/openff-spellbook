@@ -491,7 +491,6 @@ class OpenForceFieldTree(OpenForceFieldTreeBase):
         else:
             o = "Molecule already present. Skipping creation"
             self.logger.debug(o)
-            breakpoint()
 
         
         masks = kwargs.get('masks')
