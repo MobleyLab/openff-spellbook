@@ -5,7 +5,7 @@ requirements = [
     # package requirements go here
 ]
 
-with open("README.rst", "r") as fh:
+with open("README.md", "r") as fh:
     long_description = fh.read()
 
 setuptools.setup(
@@ -18,7 +18,7 @@ setuptools.setup(
     author_email='tgokey@uci.edu',
     url='https://github.com/mobleylab/openff-spellbook',
     long_description=long_description,
-    long_description_content_type="text/x-rst",
+    long_description_content_type="text/x-markdown",
     packages=setuptools.find_packages(),
     
     install_requires=requirements,
