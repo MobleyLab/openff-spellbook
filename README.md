@@ -1,50 +1,70 @@
-===============================
 openff-spellbook
-===============================
-.. 
-    image:: https://img.shields.io/travis/trevorgokey/openff-spellbook.svg
-    :target: https://travis-ci.org/trevorgokey/openff-spellbook
-..
-    image:: https://circleci.com/gh/trevorgokey/openff-spellbook.svg?style=svg
-    :target: https://circleci.com/gh/trevorgokey/openff-spellbook
-..
-    image:: https://codecov.io/gh/trevorgokey/openff-spellbook/branch/master/graph/badge.svg
-   :target: https://codecov.io/gh/trevorgokey/openff-spellbook
+================
+   <!-- image:: https://img.shields.io/travis/trevorgokey/openff-spellbook.svg -->
+   <!-- :target: https://travis-ci.org/trevorgokey/openff-spellbook -->
+   <!-- image:: https://circleci.com/gh/trevorgokey/openff-spellbook.svg?style=svg -->
+   <!-- :target: https://circleci.com/gh/trevorgokey/openff-spellbook -->
+   <!-- image:: https://codecov.io/gh/trevorgokey/openff-spellbook/branch/master/graph/badge.svg -->
+   <!-- :target: https://codecov.io/gh/trevorgokey/openff-spellbook -->
 
 Handy functionality for working with OpenFF data
 
-Installation
-############
+# Installation
 
 Available on PyPi, so a pip install should work:
 
-.. code-block:: bash
+``` bash
 
     $ pip install openff-spellbook
+```
 
 Preferably in a preconfigured virtual environment e.g. conda. Append --user if
 such an environment is not being used.
 
 Currently no dependency checking is performed... depending on the functionality,
-openforcefield, OpenMM, QCElemental, QCPortal, geomeTRIC, and Psi4 are needed.
+openforcefield (RDKit), OpenBabel, CMILES, OpenMM, QCElemental, QCPortal, geomeTRIC, and Psi4 are needed.
 
-Functionality
-#############
+# Functionality
 
 Bottled functionality resides in the `ui` submodule. So far:
 
-* QCArchive error scanning
-* Run an optimization locally using inputs pulled from QCArchive using
-  `geometric+psi4`
-* Aggregate molecules and print the energy from each optimization (including
-  torsion drives and grid scans) 
-* Take a list of SMILES from a file and enumerate isomers and conformers, with
-  the result saved as a QCSchema representation. Designed to be cluster
-  friendly for large dataset processing (block processing of the input, and
-  saving as binary msgpack data)
+<details>
+<summary>The OpenForceField Spellbook TorsionDrive parser and plotter
 
-.. code-block:: bash
+This useful utility is an automated pipeline to save and plot torsiondrive data and figures.
+```
 
+	$ python3 -m offsb.ui.qca.torsiondrive -h
+
+	usage: torsiondrive.py [-h] [--out_file_name OUT_FILE_NAME]
+						   [--datasets DATASETS] [--qm-energy]
+						   [--mm-energy {None,all,vdw,bonds,angles,dihedrals,outofplanes}]
+						   [--openff-name OPENFF_NAME]
+						   [--openff-parameter OPENFF_PARAMETER]
+						   [--openff-previous OPENFF_PREVIOUS]
+						   {torsiondrive_groupby_openff}
+
+	The OpenForceField Spellbook TorsionDrive parser
+
+	positional arguments:
+	  {torsiondrive_groupby_openff}
+
+	optional arguments:
+	  -h, --help            show this help message and exit
+	  --out_file_name OUT_FILE_NAME
+	  --datasets DATASETS
+	  --qm-energy
+	  --mm-energy {None,all,vdw,bonds,angles,dihedrals,outofplanes}
+	  --openff-name OPENFF_NAME
+	  --openff-parameter OPENFF_PARAMETER
+	  --openff-previous OPENFF_PREVIOUS
+```
+</details> 
+
+<details>
+<summary>The OpenForceField Spellbook error scanner for QCArchive
+
+```
     $ python3 -m offsb.ui.qca.errors -h
     usage: errors.py [-h] [--save-xyz] [--report-out REPORT_OUT] [--full-report]
     
@@ -73,7 +93,13 @@ Bottled functionality resides in the `ui` submodule. So far:
                             amount of memory to give to psi4 eg '10GB'
       -n NTHREADS, --nthreads NTHREADS
                             number of processors to give to psi4
-    
+```
+</details>
+
+<details>
+<summary>The OpenForceField Spellbook energy extractor from QCArchive
+
+```
     $ python3 -m offsb.ui.qca.energy-per-molecule
     usage: energy-per-molecule.py [-h] [--report-out REPORT_OUT]
     
@@ -82,8 +108,14 @@ Bottled functionality resides in the `ui` submodule. So far:
     optional arguments:
       -h, --help            show this help message and exit
       --report-out REPORT_OUT
+```
 
+</ details>
 
+<details>
+<summary>Transform a SMILES string into a QCSchema
+
+```
     $ python3 -m offsb.ui.smiles.load -h
 
     usage: load.py [-h] [-c CUTOFF] [-n MAX_CONFORMERS] [-s LINE_START]
@@ -128,7 +160,62 @@ Bottled functionality resides in the `ui` submodule. So far:
       -j, --json            Write the formatted output to qc_schema (json) format.
       -m, --msgpack         Write the formatted output to qc_schema binary message
                             pack (msgpack)
+```
+</details>
 
+<details>
+<summary>Submit an Optimization Dataset based on SMILES
+
+First, generate the the JSON for --input-molecules from `python3 -m offsb.ui.smiles.load`, then run
+the following:
+
+```
+    $ python3 -m offsb.ui.smiles.load -h
+
+	usage: submit-optimizations.py [-h] [--input-molecules INPUT_MOLECULES]
+								   [--metadata METADATA]
+								   [--compute-spec COMPUTE_SPEC]
+								   [--threads THREADS]
+								   [--dataset-name DATASET_NAME] [--server SERVER]
+								   [--priority {low,normal,high}]
+								   [--compute-tag COMPUTE_TAG] [--verbose]
+
+	The OpenFF Spellbook QCArchive Optimization dataset submitter
+
+	optional arguments:
+	  -h, --help            show this help message and exit
+	  --input-molecules INPUT_MOLECULES
+							A JSON file which contains the QCSchema ready for
+							submission. The json should be a list at the top-
+							level, containing dictionaries with a name as a key,
+							and the value a list of QCMolecules representing the
+							different conformations of the same molecule. Note
+							that entry data, e.g. the CMILES info, should not be
+							specified here as it is generated automatically from
+							this input.
+	  --metadata METADATA   The JSON file containing the metadata of the dataset.
+	  --compute-spec COMPUTE_SPEC
+							A JSON file containing the new compute specification
+							to add to the dataset
+	  --threads THREADS     Number of threads to use to communicate with the
+							server
+	  --dataset-name DATASET_NAME
+							The name of the dataset. This is needed if the dataset
+							already exists and no metadata is supplied. Useful
+							when e.g. adding computes or molecules to an existing
+							dataset.
+	  --server SERVER       The server to connect to. The special value
+							'from_file' will read from the default server
+							connection config file for e.g. authentication
+	  --priority {low,normal,high}
+							The priority of the calculations to submit.
+	  --compute-tag COMPUTE_TAG
+							The compute tag used to match computations with
+							compute managers. For OpenFF calculations, this should
+							be 'openff'
+	  --verbose             Show the progress in the output.
+```
+</details>
 
 The default behavior is to scan every dataset that OpenFF has curated (see
 `QCArchiveSpellbook.openff_qcarchive_datasets_default` in `offsb.ui.qcasb`).
