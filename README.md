@@ -459,11 +459,7 @@ Number of new tasks: 2
 
 </details>
 
-
-The default behavior is to scan every dataset that OpenFF has curated (see
-`QCArchiveSpellbook.openff_qcarchive_datasets_default` in `offsb.ui.qcasb`).
-This takes about 25 minutes to prepare when run for the first time, but the
-results will save to disk after completion, and reloading takes a second. Each
-command will look for the same cache. The search functionality to combine
-similar molecules across all dataset set takes long; near an hour. This is also
-cached by default. Both caches are saved as pickle objects for now.
+The format of the file required for `--datasets` in all commands is the following:
+`TYPE NAME WITH SPACES / SPEC1 SPEC2`
+Where we could specify, using the above dataset submission example, as:
+`OptimizationDataset OpenFF Sandbox CHO PhAlkEthOH v1.0 / default openff-1.0.0`
