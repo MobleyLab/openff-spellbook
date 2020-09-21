@@ -18,7 +18,7 @@ setuptools.setup(
     author_email='tgokey@uci.edu',
     url='https://github.com/mobleylab/openff-spellbook',
     long_description=long_description,
-    long_description_content_type="text/x-markdown",
+    long_description_content_type="text/markdown",
     packages=setuptools.find_packages(),
     
     install_requires=requirements,
