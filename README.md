@@ -119,9 +119,9 @@ This useful utility is an automated pipeline to save and plot torsiondrive data 
 	$ python3 -m offsb.ui.smiles.load -h
 
 	usage: load.py [-h] [-c CUTOFF] [-n MAX_CONFORMERS] [-s LINE_START]
-				   [-e LINE_END] [-H HEADER_LINES] [-u] [-i ISOMERS]
-				   [-o OUTPUT_FILE] [-f FORMATTED_OUT] [-j] [-m]
-				   input
+			   [-e LINE_END] [-H HEADER_LINES] [-u] [-i ISOMERS]
+			   [-o OUTPUT_FILE] [-f FORMATTED_OUT] [-j] [-m] [--ncpus NCPUS]
+			   input
 
 	A tool to transform a SMILES string into a QCSchema. Enumerates stereoisomers
 	if the SMILES is ambiguous, and generates conformers.
@@ -155,19 +155,90 @@ This useful utility is an automated pipeline to save and plot torsiondrive data 
 							The file to write the output log to
 	  -f FORMATTED_OUT, --formatted-out FORMATTED_OUT
 							Write all molecules to a formatted output as qc_schema
-							molecules. Assumes singlets! Only choose one option:
-							--json or --msgpack
+							molecules. Assumes singlets! Choose either --json or
+							--msgpack as the the format
 	  -j, --json			Write the formatted output to qc_schema (json) format.
 	  -m, --msgpack			Write the formatted output to qc_schema binary message
-							pack (msgpack)
+							pack (msgpack).
+	  --ncpus NCPUS			Number of processes to use.
 ```
+An example output if the SMILES input file is just `C` (methane) would be the following:
+```
+{	  
+	"C": [
+		{
+			"schema_name": "qcschema_molecule",
+			"schema_version": 2,
+			"validated": true,
+			"symbols": [
+				"C",
+				"H",
+				"H",
+				"H",
+				"H"
+			],
+			"geometry": [
+				0.00967296,
+				-0.02006983,
+				0.01136534,
+				1.0387219,
+				1.42757171,
+				-1.12813096,
+				1.41684881,
+				-1.11105294,
+				1.10602765,
+				-1.10880164,
+				-1.23235809,
+				-1.277628,
+				-1.35644204,
+				0.93590916,
+				1.28836596
+			],
+			"name": "CH4",
+			"molecular_charge": 0.0,
+			"molecular_multiplicity": 1,
+			"connectivity": [
+				[
+					0,
+					1,
+					1.0
+				],
+				[
+					0,
+					2,
+					1.0
+				],
+				[
+					0,
+					3,
+					1.0
+				],
+				[
+					0,
+					4,
+					1.0
+				]
+			],
+			"fix_com": false,
+			"fix_orientation": false,
+			"provenance": {
+				"creator": "QCElemental",
+				"version": "v0.15.1",
+				"routine": "qcelemental.molparse.from_schema"
+			},
+			"extras": null
+		}
+	]
+}
+```
+
 </details>
 
 <details>
 <summary>Submit an Optimization Dataset based on SMILES</summary>
 
-First, generate the the JSON for --input-molecules from `python3 -m offsb.ui.smiles.load`, then run
-the following:
+First, generate the the JSON for --input-molecules from `python3 -m offsb.ui.smiles.load`. This will
+be the direct input for `--input-molecules`. Then call the following:
 
 ```
 	$ python3 -m offsb.ui.smiles.load -h
@@ -215,7 +286,179 @@ the following:
 							be 'openff'
 	  --verbose				Show the progress in the output.
 ```
+
+Here, an example `--metadata metadata.json` could be:
+```
+{
+	"submitter": "trevorgokey",
+	"creation_date": "2020-09-18",
+	"collection_type": "OptimizationDataset",
+	"dataset_name": "OpenFF Sandbox CHO PhAlkEthOH v1.0", 
+	"short_description": "A diverse set of CHO molecules",
+	"long_description_url": "https://github.com/openforcefield/qca-dataset-submission/tree/master/submissions/2020-09-18-OpenFF-Sandbox-CHO-PhAlkEthOH",
+	"long_description": "This dataset contains an expanded set of the AlkEthOH and PhEthOH datasets, which were used in the original derivation of the frosst specification.",
+	"elements": [
+		"C",
+		"H",
+		"O"
+	],
+	"change_log": [
+		{"author": "trevorgokey",
+		 "date": "2020-09-18",
+		 "version": "1.0",
+		 "description": "A diverse set of CHO molecules. The molecules in this set were generated to include all stereoisomers if chirality was ambiguous from the SMILES input. Conformations were generated which had an RMSD of at least 4 Angstroms from all other conformers"
+		}
+	]
+}
+```
+
+And if we want to perform both optimizations using B3LYP-D3BJ/DZVP and MM OpenFF 1.0.0, then the JSON file to give to `--compute-spec compute.json` could be the following:
+
+```
+{"default":
+	{"opt_spec":
+		{"program": "geometric",
+		 "keywords":
+			{"coordsys": "tric",
+			 "enforce": 0.1,
+			 "reset": true,
+			 "qccnv": true,
+			 "epsilon": 0.0}
+		},
+		"qc_spec": {
+			"driver": "gradient",
+			"method": "b3lyp-d3bj",
+			"basis": "dzvp",
+			"program": "psi4",
+			"keywords": {
+				"maxiter": 200,
+				"scf_properties": [
+					"dipole",
+					"quadrupole",
+					"wiberg_lowdin_indices",
+					"mayer_indices"
+				]
+			}
+		}
+	},
+ "openff-1.0.0":
+	{"opt_spec":
+		{"program": "geometric",
+		 "keywords":
+			{"coordsys": "tric",
+			 "enforce": 0.1,
+			 "reset": true,
+			 "qccnv": true,
+			 "epsilon": 0.0}
+		},
+		"qc_spec": {
+			"driver": "gradient",
+			"method": "openff-1.0.0",
+			"basis": "smirnoff",
+			"program": "openmm",
+			"keywords": { }
+		}
+	}
+}
+```
+Note that the `default` specification is the standard for fitting new versions of the SMIRNOFF OpenForceField.
+
+Running the command will will produce the following output if `--verbose` is used. First, create the input molecules:
+```
+$ python3 -m offsb.ui.smiles.load methane.smi -n 10 -c 2 -f methane.json -j
+	   1 /		  1 ENTRY: C
+					  ISOMER   1/  1 CONFS: 1 SMILES: C
+					  Inputs:		   1 Isomers:		   1 Conformations:			 1
+100%|█████████████████████████████████████████████| 1/1 [00:00<00:00,  2.71it/s]
+Totals:
+  Inputs:		1
+  Isomers:		 1
+  Conformations: 1
+```
+Now submit the optimizations (here a private server using `localhost:7777`):
+
+```
+
+$ python3 -m offsb.ui.qca.submit-optimizations --verbose --metadata metadata.json --compute-spec compute.json --server localhost:7777 --priority normal --compute-tag openff --input-molecules methane.json
+
+Arguments given:
+{'compute_spec': 'compute.json',
+ 'compute_tag': 'openff',
+ 'dataset_name': None,
+ 'input_molecules': 'methane.json',
+ 'metadata': 'metadata.json',
+ 'priority': 'normal',
+ 'server': 'localhost:7777',
+ 'threads': None}
+
+Dataset created with the following metadata:
+{'change_log': [{'author': 'trevorgokey',
+				 'date': '2020-09-18',
+				 'description': 'A diverse set of CHO molecules. The molecules '
+								'in this set were generated to include all '
+								'stereoisomers if chirality was ambiguous from '
+								'the SMILES input. Conformations were '
+								'generated which had an RMSD of at least 4 '
+								'Angstroms from all other conformers',
+				 'version': '1.0'}],
+ 'collection_type': 'OptimizationDataset',
+ 'creation_date': '2020-09-18',
+ 'dataset_name': 'OpenFF Sandbox CHO PhAlkEthOH v1.0',
+ 'elements': ['C', 'H', 'O'],
+ 'long_description': 'This dataset contains an expanded set of the AlkEthOH '
+					 'and PhEthOH datasets, which were used in the original '
+					 'derivation of the frosst specification.',
+ 'long_description_url': 'https://github.com/openforcefield/qca-dataset-submission/tree/master/submissions/2020-09-18-OpenFF-Sandbox-CHO-PhAlkEthOH',
+ 'short_description': 'A diverse set of CHO molecules',
+ 'submitter': 'trevorgokey'}
+
+Successfully added specification default:
+{'opt_spec': {'keywords': {'coordsys': 'tric',
+						   'enforce': 0.1,
+						   'epsilon': 0.0,
+						   'qccnv': True,
+						   'reset': True},
+			  'program': 'geometric'},
+ 'qc_spec': {'basis': 'dzvp',
+			 'driver': 'gradient',
+			 'keywords': {'maxiter': 200,
+						  'scf_properties': ['dipole',
+											 'quadrupole',
+											 'wiberg_lowdin_indices',
+											 'mayer_indices']},
+			 'method': 'b3lyp-d3bj',
+			 'program': 'psi4'}}
+
+Successfully added specification openff-1.0.0:
+{'opt_spec': {'keywords': {'coordsys': 'tric',
+						   'enforce': 0.1,
+						   'epsilon': 0.0,
+						   'qccnv': True,
+						   'reset': True},
+			  'program': 'geometric'},
+ 'qc_spec': {'basis': 'smirnoff',
+			 'driver': 'gradient',
+			 'keywords': {},
+			 'method': 'openff-1.0.0',
+			 'program': 'openmm'}}
+
+Loading methane.json into QCArchive...
+Number of unique molecules: 1
+Entries: 100%|████████████████████████████████████| 1/1 [00:00<00:00, 39.24it/s]
+
+Number of new entries: 1/1
+
+Submitting calculations in batches of 20 for specification default
+Tasks: 100%|██████████████████████████████████████| 1/1 [00:00<00:00, 16.18it/s]
+
+Submitting calculations in batches of 20 for specification openff-1.0.0
+Tasks: 100%|██████████████████████████████████████| 1/1 [00:00<00:00, 20.08it/s]
+
+Number of new tasks: 2
+```
+
 </details>
+
 
 The default behavior is to scan every dataset that OpenFF has curated (see
 `QCArchiveSpellbook.openff_qcarchive_datasets_default` in `offsb.ui.qcasb`).
