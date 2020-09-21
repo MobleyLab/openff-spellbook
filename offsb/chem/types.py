@@ -482,9 +482,9 @@ class AtomType(ChemType):
     def from_data(
         cls,
         symbol: BitVec,
+        H: BitVec,
         X: BitVec,
         x: BitVec,
-        H: BitVec,
         r: BitVec,
         aA: BitVec,
         inv: bool = False,
@@ -493,9 +493,9 @@ class AtomType(ChemType):
 
         cls = cls()
         cls._symbol = symbol
+        cls._H = H
         cls._X = X
         cls._x = x
-        cls._H = H
         cls._r = r
         cls._aA = aA
         return cls
@@ -591,7 +591,7 @@ class AtomType(ChemType):
             else:
                 aA[0] = True
 
-        return self.from_data(symbol, X, x, H, r, aA)
+        return self.from_data(symbol, H, X, x, r, aA)
 
     def __repr__(self):
         return "Syms: {} H: {} X: {} x: {} r: {} aA: {}".format(
@@ -618,7 +618,7 @@ class AtomType(ChemType):
         ]
         for line in vals:
             rstr = "!r" if line[-2] == 0 else "r{}".format(line[-2] + 2)
-            aA = "a" if line[-1] == 0 else "A"
+            aA = "A" if line[-1] == 0 else "a"
             term = "[#{}H{}X{}x{}{}{}]".format(*line[:-2], rstr, aA)
 
             terms.append(term)
@@ -857,8 +857,8 @@ class BondType(ChemType):
             elif sym == ":":
                 order[4] = True
 
-            aA[1] = True if ret.group(2) == "!@" else False
-            aA[0] = True if ret.group(2) == "@" else False
+            aA[1] = True if ret.group(2) == "@" else False
+            aA[0] = True if ret.group(2) == "!@" else False
 
         return self.from_data(order, aA)
 
@@ -910,8 +910,8 @@ class BondType(ChemType):
             )
         ]
         for line in vals:
-            aA = "@" if line[-1] == 0 else "!@"
-            bond_lookup = {0: "-", 1: "=", 2: "#", 3: ":"}
+            aA = "!@" if line[-1] == 0 else "@"
+            bond_lookup = {1: "-", 2: "=", 3: "#", 4: ":"}
             bond = bond_lookup[line[0]]
             term = "{};{}".format(bond, aA)
             terms.append(term)
