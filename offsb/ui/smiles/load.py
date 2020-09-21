@@ -1,60 +1,122 @@
 #!/usr/bin/env python3
 
-import sys
 import json
-import numpy as np
+import logging
+import sys
+import contextlib
+import io
+
 import msgpack
+import numpy as np
 
 import openforcefield
+import tqdm
 from openforcefield.topology.molecule import Molecule
-
 from rdkit import Chem
 from rdkit.Chem.EnumerateStereoisomers import EnumerateStereoisomers
-from rdkit.Chem.EnumerateStereoisomers import StereoEnumerationOptions
 
+from multiprocessing import Pool
+
+logger = logging.getLogger(__name__)
+# TODO: convert output to use the logger
+
+def detect_file_total_data_lines(filename, skip_rows=0):
+    N = -skip_rows
+    for line in open(filename, "r"):
+        N += 1
+    return N
+
+def parse_file(filename, N, line_start=0, line_end=None, skip_rows=0):
+    """
+    start and end is inclusive
+    """
+
+    if line_end is None:
+        line_end = N
+
+    smi = []
+
+    with open(filename, "r") as fd:
+        for lineno, line in enumerate(fd, -skip_rows):
+            if lineno < line_start:
+                continue
+            if lineno > line_end:
+                continue
+            spline = line.split()
+            smi.append(spline[0])
+
+    return smi
+
+def process_smiles_to_qcschema(lineno, N, header, filename, **kwargs):
+
+    out_lines = ""
+    out_mols = {}
+    smi_list = parse_file(filename, N, line_start=lineno, line_end=lineno, skip_rows=header)
+    out_lines += "{:8d} / {:8d} ENTRY: {:s}\n".format(lineno+1, N, smi_list[0])
+    mols = expand_smiles_to_qcschema(smi_list[0], **kwargs)
+
+    isomers = len(mols)
+    conformations = 0
+    entries = 1
+    for i, (smi, mol_list) in enumerate(mols.items(), 1):
+        for mol in mol_list:
+            conformations += len(mol.conformers)
+        out_lines += "{:22s}ISOMER {:3d}/{:3d} CONFS: {} SMILES: {:s}\n".format("", i, len(mols), len(mol.conformers), smi)
+
+    out_mols.update(mols)
+    # out_lines += out
+
+    return out_mols, out_lines, (entries, isomers, conformations)
 
 def expand_smiles_to_qcschema(
-        input_fnm,
-        cutoff=None,
-        n_confs=1,
-        unique_smiles=False,
-        isomer_max=-1,
-        line_start=0,
-        line_end=None,
-        skip_rows=0,
-        output_fid=None,
-        debug=False):
+    smi,
+    cutoff=None,
+    n_confs=1,
+    unique_smiles=True,
+    isomer_max=-1,
+):
     """
     Load a file containing smiles strings, and generate stereoisomers and
     conformers for each stereoisomer.
 
     Parameters
     ----------
-    input_fnm : str, The input filename to read SMILES from
-    cutoff : float, During the all-pairwise RMSD calculation, remove
+    input_fnm : str
+        The input filename to read SMILES from
+    cutoff : float
+        During the all-pairwise RMSD calculation, remove
         molecules that are less than this cutoff value apart
-    n_confs : int, The number of conformations to attempt generating
-    unique_smiles : bool, If stereoisomers are generated, organize molecules by
+    n_confs : int
+        The number of conformations to attempt generating
+    unique_smiles : bool
+        If stereoisomers are generated, organize molecules by
         their unambiguous SMILES string
-    isomers : int, The number of stereoisomers to keep if multiple are found.
+    isomers : int
+        The number of stereoisomers to keep if multiple are found.
         The default of -1 means keep all found.
-    line_start : int, The line in the input file to start processing
-    line_end : int, The line in the input file to stop processing
-        (not inclusive)
-    skip_rows : int, The number of lines at the top of the file to skip before
+    line_start : int
+        The line in the input file to start processing
+    line_end : int
+        The line in the input file to stop processing (not inclusive)
+    skip_rows : int
+        The number of lines at the top of the file to skip before
         data begins
-    output_fid : FileHandle, the file object to write to. Must support the
-        write function
+    output_fid : FileHandle
+        the file object to write to. Must support the write function
 
     Returns
     -------
-    mols : dict, keys are the smiles from the input file, and the value is a
+    mols : dict
+        Keys are the smiles from the input file, and the value is a
         list of OpenFF molecules with conformers attached.
-    output : str, the contents of what was written to output_fid
+    output : str
+        The contents of what was written to output_fid
     """
 
+    # TODO: unique_smiles=False is broken as it repeats isomers for some reason
+    unique_smiles = True
+
     # Initializing
-    skip_rows = 1
     i = 0
     rmsd_cutoff = cutoff
 
@@ -62,295 +124,321 @@ def expand_smiles_to_qcschema(
     molecule_set = {}
     total_mol = 0
 
-    N = -skip_rows
-    for line in open(input_fnm, 'r'):
-        N += 1
-    if line_end is None:
-        line_end = N
-
-    start = line_start 
-    stop = line_end
-
-    fid = output_fid
-    dowrite = fid is not None
-    #############################################################################
-
-    # Output settings and general description to the log
     output = ""
-    out_line = "# Running entries {:d} to {:d}\n".format(start, stop)
-    if dowrite:
-        fid.write(out_line)
-    output += out_line
 
-    out_line = "# Generating max {:d} conformers, prune RMSD {:6.2f}\n".format(
-        n_confs, rmsd_cutoff)
-    if dowrite:
-        fid.write(out_line)
-    output += out_line
+    ref_smi = smi
+
+    try:
+        # If this fails, probably due to stereochemistry. Catch the
+        # exception, then enumerate the variations on the SMILES.
+        mol = Molecule.from_smiles(smi)
+        smi_list = [smi]
+
+    except openforcefield.utils.toolkits.UndefinedStereochemistryError:
+
+        isomers = tuple(EnumerateStereoisomers(Chem.MolFromSmiles(smi)))
+        smi_list = [
+            smi
+            for smi in sorted(
+                Chem.MolToSmiles(x, isomericSmiles=True) for x in isomers
+            )
+        ]
+
+        # Clip the isomers here if a limit was specified
+        if isomer_max > 0:
+            smi_list = smi_list[:isomer_max]
 
     if unique_smiles:
-        out_line = "# Collecting molecules using unique SMILES\n"
-    else:
-        out_line = "# Collecting molecules by their input SMILES\n"
-    if dowrite:
-        fid.write(out_line)
-    output += out_line
-
-    if isomer_max < 0:
-        out_line = "# Collection all stereoisomers found\n"
-    else:
-        out_line = "# Collecting at most {:d} stereoisomers\n".format(isomer_max)
-    if dowrite:
-        fid.write(out_line)
-    output += out_line
-    #############################################################################
-
-    for n, line in enumerate(open(input_fnm, 'r')):
-        spline = line.split()
-        if n < skip_rows or n < start:
-            n += 1
-            continue
-        if n == stop:
-            break
-
-        smi = spline[0]
-        ref_smi = spline[0]
-
-        out_line = "{:8d} / {:8d} SMILES: {:s}".format(
-            n - skip_rows+1, N, smi)
-        if dowrite:
-            fid.write(out_line)
-        output += out_line
-
-        try:
-            # If this fails, probably due to stereochemistry. Catch the
-            # exception, then enumerate the variations on the SMILES.
-            mol = Molecule.from_smiles(smi)
-            i += 1
-            smi_list = [smi]
-
-        except openforcefield.utils.toolkits.UndefinedStereochemistryError:
-
-            isomers = tuple(EnumerateStereoisomers(Chem.MolFromSmiles(smi)))
-            smi_list = [smi for smi in sorted(
-                Chem.MolToSmiles(x, isomericSmiles=True) for x in isomers)]
-
-            # Clip the isomers here if a limit was specified
-            if isomer_max > 0:
-                smi_list = smi_list[:isomer_max]
-
-            out_line = "\n"
-            if dowrite:
-                fid.write(out_line)
-            output += out_line
-
-        if not unique_smiles:
-            # if we are aggregating under the same SMILES, collect the mols
-            # under the reference SMILES
-            mols = [Molecule.from_smiles(smi) for smi in smi_list]
-            molecule_set[ref_smi] = mols
-        else:
-            for smi in smi_list:
-                molecule_set[smi] = [Molecule.from_smiles(smi)]
-
+        # we are collecting molecules by their specific stereoisomer SMILES
         for smi in smi_list:
-            initial_mol_N = 0
+            molecule_set[smi] = [Molecule.from_smiles(smi)]
+    else:
+        mols = [Molecule.from_smiles(smi) for smi in smi_list]
+        molecule_set[ref_smi] = mols
 
-            # Some book keeping to make sure that the stereoisomer SMILES
-            # is always printed to the log, but the returned data structure
-            # follows the request input settings
-            if not unique_smiles:
-                out_smi = smi
-                smi = ref_smi
-            else:
-                out_smi = smi
+    for smi in smi_list:
+        initial_mol_N = 0
 
-            for mol in molecule_set[smi]:
+        # Some book keeping to make sure that the stereoisomer SMILES
+        # is always printed to the log, but the returned data structure
+        # follows the request input settings
+        if unique_smiles:
+            out_smi = smi
+        else:
+            out_smi = smi
+            smi = ref_smi
 
-                # Not obvious, but i is the number of unique SMILES strings
-                # generated (so far) from the input SMILES
-                i += 1
-                out_line = "{:8d}  ISOMER: {:s}\n".format(i, out_smi)
-                if dowrite:
-                    fid.write(out_line)
-                    fid.flush()
-                output += out_line
 
-                # attempt to generate n_confs, but the actual number could be
-                # smaller
-                mol.generate_conformers(n_conformers=n_confs)
-                L = len(mol.conformers)
+        for mol in molecule_set[smi]:
 
-                # This will be used to determined whether it should be pruned
-                # from the RMSD calculations. If we find it should be pruned
-                # just once, it is sufficient to avoid it later in the pairwise
-                # processing.
-                uniq = list([True] * L)
+            # Not obvious, but i is the number of unique SMILES strings
+            # generated (so far) from the input SMILES
+            i += 1
 
-                out_str = ""
+            # attempt to generate n_confs, but the actual number could be
+            # smaller
+            f = io.StringIO()
+            with contextlib.redirect_stderr(f):
+                with contextlib.redirect_stdout(f):
+                    mol.generate_conformers(n_conformers=n_confs)
 
-                if L > 1:
-                    if debug:
-                        out_str += "        RMSD: "
+            L = len(mol.conformers)
+            # This will be used to determined whether it should be pruned
+            # from the RMSD calculations. If we find it should be pruned
+            # just once, it is sufficient to avoid it later in the pairwise
+            # processing.
+            uniq = list([True] * L)
 
-                    # The reference conformer for RMSD calculation
-                    for j in range(L - 1):
-                        if debug:
-                            out_str += "Ref_{:03d} ".format(j)
+            # This begins the pairwise RMSD pruner
+            if L > 1:
 
-                        # A previous loop has determine this specific conformer
-                        # is too close to another, so we can entirely skip it
-                        if not uniq[j]:
-                            if debug:
-                                out_str += "X "
-                            continue
+                # The reference conformer for RMSD calculation
+                for j in range(L - 1):
 
-                        # Rather than print every rmsd values, print the min,
-                        # max, and mean at the end as a debugging measure
-                        rmsd = []
+                    # A previous loop has determine this specific conformer
+                    # is too close to another, so we can entirely skip it
+                    if not uniq[j]:
+                        continue
 
-                        # since k starts from j+1, we are only looking at the
-                        # upper triangle of the comparisons (j < k)
-                        for k in range(j + 1, L):
+                    # since k starts from j+1, we are only looking at the
+                    # upper triangle of the comparisons (j < k)
+                    for k in range(j + 1, L):
 
-                            r = np.linalg.norm(
-                                mol.conformers[k] - mol.conformers[j], axis=1)
-                            rmsd_i = r.mean()
-                            rmsd.append(rmsd_i)
+                        r = np.linalg.norm(
+                                mol.conformers[k] - mol.conformers[j], axis=1
+                                )
+                        rmsd_i = r.mean()
 
-                            # Flag this conformer for pruning, and also
-                            # prevent it from being used as a reference in the
-                            # future comparisons
-                            if rmsd_i < rmsd_cutoff:
-                                uniq[k] = False
+                        # Flag this conformer for pruning, and also
+                        # prevent it from being used as a reference in the
+                        # future comparisons
+                        if rmsd_i < rmsd_cutoff:
+                            uniq[k] = False
 
-                        min_rmsd = min(rmsd)
-                        max_rmsd = max(rmsd)
-                        mean_rmsd = sum(rmsd) / len(rmsd)
-                        if debug:
-                            out_str_tmp = "min={:6.2f} max={:6.2} mean={:6.2} "
-                            out_str += out_str_tmp.format(min_rmsd, max_rmsd,
-                                mean_rmsd)
+                # hack? how to set conformers explicity if different number than
+                # currently stored?
+                confs = [
+                        mol.conformers[j] for j, add_bool in enumerate(uniq) if add_bool
+                        ]
+                mol._conformers = confs.copy()
 
-                    # hack? how to set conformers explicity if different number?
-                    confs = [mol.conformers[j] for j, add_bool
-                        in enumerate(uniq) if add_bool]
-                    mol._conformers = confs.copy()
 
-                initial_mol_N += len(mol.conformers)
-                total_mol += initial_mol_N
 
-                # output the report str on the RMSD calcs
-                out_str_tmp = "{:9s} Kept: {:4d} / {:4d} {:s} Total: {:12d}\n"
-                out_str = out_str_tmp.format("", len(mol.conformers),
-                    L, out_str, total_mol)
-                output += out_str
-                if dowrite:
-                    fid.write(out_str)
-                    fid.flush()
+    return molecule_set
 
-    if dowrite:
-        fid.close()
-
-    return molecule_set, output
 
 def main():
 
     import argparse
+
     parser = argparse.ArgumentParser(
-        description="""
-        A tool to transform a SMILES string into a QCSchema.
-        Enumerates stereoisomers if the SMILES is ambiguous, and generates
-        conformers.
-        """
-    )
-    parser.add_argument("input", type=str,
-        help="""Input file containing smiles strings. Assumes that the file is
-        CSV-like, splits on spaces, and the SMILES is the first column""")
+            description="A tool to transform a SMILES string into a QCSchema.  Enumerates stereoisomers if the SMILES is ambiguous, and generates conformers."
+            )
+    parser.add_argument(
+            "input",
+            type=str,
+            help="Input file containing smiles strings. Assumes that the file is CSV-like, splits on spaces, and the SMILES is the first column",
+            )
 
-    parser.add_argument("-c", "--cutoff", type=float,
-        help=""" Prune conformers less than this cutoff using all pairwise RMSD
-        comparisons (in Angstroms)""")
+    parser.add_argument(
+            "-c",
+            "--cutoff",
+            type=float,
+            help="Prune conformers less than this cutoff using all pairwise RMSD comparisons (in Angstroms)",
+            )
 
-    parser.add_argument("-n", "--max-conformers", type=int,
-        help="The number of conformations to attempt generating")
+    parser.add_argument(
+            "-n",
+            "--max-conformers",
+            type=int,
+            help="The number of conformations to attempt generating",
+            )
 
-    parser.add_argument("-s", "--line-start", type=int, default=0,
-        help="The line in the input file to start processing")
+    parser.add_argument(
+            "-s",
+            "--line-start",
+            type=int,
+            default=0,
+            help="The line in the input file to start processing",
+            )
 
-    parser.add_argument("-e", "--line-end", type=int,
-        help="The line in the input file to stop processing (not inclusive)")
+    parser.add_argument(
+            "-e",
+            "--line-end",
+            type=int,
+            help="The line in the input file to stop processing (not inclusive)",
+            )
 
-    parser.add_argument("-H", "--header-lines", type=int,
-        help=""" The number of lines at the top of the file to skip before data
-        begins""")
+    parser.add_argument(
+            "-H",
+            "--header-lines",
+            type=int,
+            help=""" The number of lines at the top of the file to skip before data
+        begins""",
+        default=0,
+        )
 
-    parser.add_argument("-u", "--unique-smiles", action="store_true",
-        help="""If stereoisomers are generated, organize molecules by their
-        unambiguous SMILES string""")
+    parser.add_argument(
+            "-u",
+            "--unique-smiles",
+            action="store_true",
+            help="""If stereoisomers are generated, organize molecules by their
+        unambiguous SMILES string""",
+        )
 
-    parser.add_argument("-i", "--isomers", type=int, default=-1,
-        help="""The number of stereoisomers to keep if multiple are found""")
+    parser.add_argument(
+            "-i",
+            "--isomers",
+            type=int,
+            default=-1,
+            help="""The number of stereoisomers to keep if multiple are found""",
+            )
 
-    parser.add_argument("-o", "--output-file", type=str,
-        help="The file to write the output log to")
+    parser.add_argument(
+            "-o", "--output-file", type=str, help="The file to write the output log to"
+            )
 
-    parser.add_argument("-f", "--formatted-out", type=str,
-        help="""
-        Write all molecules to a formatted output as qc_schema molecules.
-        Assumes singlets!
-        Only choose one option: --json or --msgpack""")
+    parser.add_argument(
+            "-f",
+            "--formatted-out",
+            type=str,
+            help="Write all molecules to a formatted output as qc_schema molecules.  Assumes singlets! Choose either --json or --msgpack as the  the format",
+            )
 
-    parser.add_argument("-j", "--json", action="store_true",
-        help="Write the formatted output to qc_schema (json) format.")
+    parser.add_argument(
+            "-j",
+            "--json",
+            action="store_true",
+            help="Write the formatted output to qc_schema (json) format.",
+            )
 
-    parser.add_argument("-m", "--msgpack", action="store_true",
-        help="""Write the formatted output to qc_schema binary message pack
-        (msgpack)""")
+    parser.add_argument(
+            "-m",
+            "--msgpack",
+            action="store_true",
+            help="Write the formatted output to qc_schema binary message pack (msgpack).",
+            )
+
+    parser.add_argument(
+            "--ncpus",
+            type=int,
+            help="Number of processes to use.",
+            )
 
     args = parser.parse_args()
 
     if args.output_file is not None:
-        fid = open(args.output_file, 'w')
+        fid = open(args.output_file, "w")
     else:
-        fid = None
+        fid = sys.stdout
 
-    mols, out = expand_smiles_to_qcschema(
-        args.input,
-        cutoff=args.cutoff,
-        n_confs=args.max_conformers,
-        unique_smiles=args.unique_smiles,
-        isomer_max=args.isomers,
-        line_start=args.line_start,
-        line_end=args.line_end,
-        skip_rows=args.header_lines,
-        output_fid=fid)
+    start = args.line_start
 
-    if args.output_file is not None:
+    end = args.line_end
+    N = detect_file_total_data_lines(args.input, args.header_lines)
+    if end is None:
+        end = N
+
+    #############################################################################
+
+    # Output settings and general description to the log
+    output = ""
+    out_line = "# Running entries {:d} to {:d}\n".format(start + 1, end)
+    output += out_line
+
+    out_line = "# Generating max {:d} conformers, prune RMSD {:6.2f}\n".format(
+            args.max_conformers, args.cutoff
+            )
+    output += out_line
+
+    if args.unique_smiles:
+        out_line = "# Collecting molecules using unique SMILES\n"
+    else:
+        out_line = "# Collecting molecules by their input SMILES\n"
+    output += out_line
+
+    if args.isomers < 0:
+        out_line = "# Collecting all stereoisomers found\n"
+    else:
+        out_line = "# Collecting at most {:d} stereoisomers\n".format(args.isomers)
+
+    output += out_line
+    fid.write(out_line)
+    fid.flush()
+    #############################################################################
+
+    kwargs = dict(
+            cutoff=args.cutoff,
+            n_confs=args.max_conformers,
+            unique_smiles=args.unique_smiles,
+            isomer_max=args.isomers)
+
+    mols = {}
+    entries, isomers, conformations = 0, 0, 0
+    if args.ncpus == 1:
+        for i in tqdm.tqdm(range(start, end), total=end-start, ncols=80):
+            fn_args = (i, end, args.header_lines, args.input)
+            mol, out_lines, counts = process_smiles_to_qcschema(*fn_args, **kwargs)
+            mols.update(mol)
+            fid.write(out_lines)
+            entries += counts[0]
+            isomers += counts[1]
+            conformations += counts[2]
+            fid.write("{:22s}Inputs: {:10d} Isomers: {:10d} Conformations: {:10d}\n".format("", entries,isomers,conformations))
+            
+    else:
+        pool = Pool(processes=args.ncpus)
+
+        work = []
+
+        for i in range(start, end):
+            fn_args = (i, end, args.header_lines, args.input)
+            unit = pool.apply_async(process_smiles_to_qcschema, fn_args, kwargs)
+            work.append(unit)
+
+        for i, unit in tqdm.tqdm(enumerate(work), total=len(work), ncols=80):
+            mol, out_lines, counts = unit.get()
+            mols.update(mol)
+            fid.write(out_lines)
+            entries += counts[0]
+            isomers += counts[1]
+            conformations += counts[2]
+            fid.write("{:22s}Inputs: {:10d} Isomers: {:10d} Conformations: {:10d}\n".format("", entries,isomers,conformations))
+
+        pool.close()
+
+    fid.write("Totals:\n")
+    fid.write("  Inputs:       {}\n".format(entries))
+    fid.write("  Isomers:       {}\n".format(isomers))
+    fid.write("  Conformations: {}\n".format(conformations))
+
+    if args.output_file is not None and fid is not sys.stdout:
         fid.close()
-    else:
-        print(out)
 
     serialize_method = "json"
+    serializer = json
     if args.msgpack:
         serialize_method = "msgpack-ext"
+        serializer = msgpack
 
     if args.json is not None:
         json_mol = {}
         for smi in mols:
             json_mol[smi] = [
-                mol.to_qcschema(conformer=i).serialize(serialize_method)
+                serializer.loads(
+                    mol.to_qcschema(conformer=i).serialize(serialize_method)
+                )
                 for mol in mols[smi]
                 for i in range(mol.n_conformers)
             ]
 
         if args.formatted_out:
             if args.msgpack:
-                with open(args.formatted_out, 'wb') as fid:
+                with open(args.formatted_out, "wb") as fid:
                     msgpack.dump(json_mol, fid)
             elif args.json:
-                with open(args.formatted_out, 'w') as fid:
-                    json.dump(json_mol, fid)
+                with open(args.formatted_out, "w") as fid:
+                    json.dump(json_mol, fid, indent=2)
 
 
 if __name__ == "__main__":
