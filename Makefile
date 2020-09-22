@@ -5,8 +5,8 @@ default:
 
 pypi:
 	@echo \#Make a new tag
-	@echo rm -rf dist/*
+	@echo rm -rf dist/\*
 	@echo python3 setup.py sdist bdist_wheel
-	@echo python3 -m twine upload dist/*
+	@echo python3 -m twine upload dist/\*
 clean:
 	python3 setup.py clean
