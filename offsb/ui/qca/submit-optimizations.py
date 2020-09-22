@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import logging
+import lzma
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import zip_longest
@@ -11,26 +12,6 @@ import qcfractal.interface as ptl
 import tqdm
 
 logger = logging.getLogger(__name__)
-
-
-# class TqdmLoggingHandler(logging.Handler):
-#     def __init__(self, level=logging.NOTSET):
-#         super().__init__(level)
-
-#     def emit(self, record):
-#         try:
-#             msg = self.format(record)
-#             tqdm.tqdm.write(msg)
-#             self.flush()
-
-#         except (KeyboardInterrupt, SystemExit):
-#             raise
-
-#         except:
-#             self.handleError(record)
-
-
-# logger.addHandler(TqdmLoggingHandler())
 
 
 def chunk(iterable, chunk_size):
@@ -227,10 +208,35 @@ def submit_qca_optimization_dataset(
     threads=None,
     compute_tag=None,
     priority="normal",
-    skip_compute=False
+    skip_compute=False,
 ):
     """
-    Create or update an optimization dataset
+    Create or update an optimization dataset.
+
+    Parameters
+    ----------
+    dataset_name : str
+        The name of the dataset. This is needed if the dataset already exists and no metadata is supplied. Useful when e.g. adding computes or molecules to an existing dataset.
+    metadata : str
+        A filename specifying the metadata needed to create a new dataset, in JSON format.
+    compute_spec : str
+        A filename specifying the compute specifications for the dataset, in JSON format.
+    input_molecules : str
+        A filename specifying the molecules to load into the dataset as entries, in JSON format.
+    server : str
+        The server URI to connect to. The special value 'from_file' will read from the default server connection config file for e.g. authentication
+    threads : int
+        The number of threads to use to when contacting the server.
+    compute_tag : str
+        The compute tag used to match computations with compute managers. For OpenFF calculations, this should be "openff"
+    priorty : str
+        The priority of new calculations to submit. This must be either "low", "normal", or "high".
+    skip_compute : bool
+        Do not submit the tasks after the molecules and compute specifications have been added
+
+    Returns
+    -------
+    None
     """
 
     ds_type = "OptimizationDataset"
@@ -251,6 +257,9 @@ def submit_qca_optimization_dataset(
     try:
 
         ds = client.get_collection(ds_type, ds_name)
+
+        logger.info("\nDataset loaded with the following metadata:")
+        logger.info(pformat(ds.data.metadata))
 
     except KeyError:
 
@@ -287,7 +296,11 @@ def submit_qca_optimization_dataset(
         total_calcs = 0
 
         logger.info("\nLoading {} into QCArchive...".format(input_molecules))
-        input_ds = json.load(open(input_molecules))
+        if input_molecules.endswith("lzma") or input_molecules.endswith("xz"):
+            input_ds = json.load(lzma.open(input_molecules, "rb"))
+        else:
+            input_ds = json.load(open(input_molecules))
+
         logger.info("Number of unique molecules: {}".format(len(input_ds)))
 
         work = []
@@ -410,7 +423,7 @@ def main():
     parser.add_argument(
         "--skip-compute",
         action="store_true",
-        help="Do not submit the tasks after the molecules and compute specifications have been added"
+        help="Do not submit the tasks after the molecules and compute specifications have been added",
     )
 
     parser.add_argument(
