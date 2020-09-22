@@ -13,24 +13,24 @@ import tqdm
 logger = logging.getLogger(__name__)
 
 
-class TqdmLoggingHandler(logging.Handler):
-    def __init__(self, level=logging.NOTSET):
-        super().__init__(level)
+# class TqdmLoggingHandler(logging.Handler):
+#     def __init__(self, level=logging.NOTSET):
+#         super().__init__(level)
 
-    def emit(self, record):
-        try:
-            msg = self.format(record)
-            tqdm.tqdm.write(msg)
-            self.flush()
+#     def emit(self, record):
+#         try:
+#             msg = self.format(record)
+#             tqdm.tqdm.write(msg)
+#             self.flush()
 
-        except (KeyboardInterrupt, SystemExit):
-            raise
+#         except (KeyboardInterrupt, SystemExit):
+#             raise
 
-        except:
-            self.handleError(record)
+#         except:
+#             self.handleError(record)
 
 
-logger.addHandler(TqdmLoggingHandler())
+# logger.addHandler(TqdmLoggingHandler())
 
 
 def chunk(iterable, chunk_size):
@@ -135,7 +135,9 @@ def add_compute_specs(ds, specifications):
             specification resembles the following:
 
             {"default":
-                {"opt_spec":
+                {"description": "A calculation using b3lyp-djbj/dzvp",
+                 "overwrite": false,
+                 "opt_spec":
                     {"program": "geometric",
                      "keywords":
                         {"coordsys": "tric",
@@ -197,7 +199,11 @@ def add_compute_specs(ds, specifications):
 
         try:
 
-            ds.add_specification(spec_name, opt_spec, qc_spec)
+            overwrite = qc_spec.pop("overwrite", False)
+            description = qc_spec.pop("description", None)
+            kwargs = dict(overwrite=overwrite, description=description)
+
+            ds.add_specification(spec_name, opt_spec, qc_spec, **kwargs)
 
             spec["qc_spec"]["keywords"] = kw.dict()["values"]
             success[spec_name] = True
@@ -221,6 +227,7 @@ def submit_qca_optimization_dataset(
     threads=None,
     compute_tag=None,
     priority="normal",
+    skip_compute=False
 ):
     """
     Create or update an optimization dataset
@@ -311,7 +318,8 @@ def submit_qca_optimization_dataset(
 
         stride = 20
 
-        if compute_spec is not None:
+        # Only submit tasks that were explicitly given as parameters
+        if compute_spec is not None and not skip_compute:
             new_tasks = 0
             for qc_spec_name in specs:
                 out_str = (
@@ -399,11 +407,16 @@ def main():
         default=None,
         help="The compute tag used to match computations with compute managers. For OpenFF calculations, this should be 'openff'",
     )
+    parser.add_argument(
+        "--skip-compute",
+        action="store_true",
+        help="Do not submit the tasks after the molecules and compute specifications have been added"
+    )
 
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Show the progress in the output.",
+        help="Show details of the submission process.",
     )
 
     args = vars(parser.parse_args())

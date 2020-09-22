@@ -15,13 +15,14 @@ import offsb.qcarchive.qcatree as qca
 def load_dataset_input(fnm):
     datasets = [
         tuple([line.split()[0], " ".join(line.strip("\n").split()[1:])])
-        for line in open(fnm).readlines()
+        for line in open(fnm).readlines() if not line.lstrip().startswith("#")
     ]
     return datasets
 
 
 class QCArchiveSpellBook:
 
+    # blacklists
     openff_qcarchive_datasets_bad_name = [
         ("OptimizationDataset", "FDA Optimization Dataset 1"),
         ("OptimizationDataset", "Kinase Inhibitors: WBO Distributions"),
@@ -31,58 +32,8 @@ class QCArchiveSpellBook:
         ("OptimizationDataset", "OpenFF Ehrman Informative Optimization v0.1")
     ]
     openff_qcarchive_datasets_default = [
-        ("GridOptimizationDataset", "OpenFF Trivalent Nitrogen Set 1"),
-        ("GridOptimizationDataset", "OpenFF Trivalent Nitrogen Set 2"),
-        ("GridOptimizationDataset", "OpenFF Trivalent Nitrogen Set 3"),
-        ("TorsionDriveDataset", "OpenFF Fragmenter Validation 1.0"),
-        ("TorsionDriveDataset", "OpenFF Full TorsionDrive Benchmark 1"),
-        ("TorsionDriveDataset", "OpenFF Gen 2 Torsion Set 1 Roche"),
-        ("TorsionDriveDataset", "OpenFF Gen 2 Torsion Set 1 Roche 2"),
-        ("TorsionDriveDataset", "OpenFF Gen 2 Torsion Set 2 Coverage"),
-        ("TorsionDriveDataset", "OpenFF Gen 2 Torsion Set 2 Coverage 2"),
-        ("TorsionDriveDataset", "OpenFF Gen 2 Torsion Set 3 Pfizer Discrepancy"),
-        ("TorsionDriveDataset", "OpenFF Gen 2 Torsion Set 3 Pfizer Discrepancy 2"),
-        ("TorsionDriveDataset", "OpenFF Gen 2 Torsion Set 4 eMolecules Discrepancy"),
-        ("TorsionDriveDataset", "OpenFF Gen 2 Torsion Set 4 eMolecules Discrepancy 2"),
-        ("TorsionDriveDataset", "OpenFF Gen 2 Torsion Set 5 Bayer"),
-        ("TorsionDriveDataset", "OpenFF Gen 2 Torsion Set 5 Bayer 2"),
-        ("TorsionDriveDataset", "OpenFF Gen 2 Torsion Set 6 Supplemental"),
-        ("TorsionDriveDataset", "OpenFF Gen 2 Torsion Set 6 Supplemental 2"),
-        ("TorsionDriveDataset", "OpenFF Group1 Torsions"),
-        ("TorsionDriveDataset", "OpenFF Group1 Torsions 2"),
-        ("TorsionDriveDataset", "OpenFF Group1 Torsions 3"),
-        ("TorsionDriveDataset", "OpenFF Primary Benchmark 1 Torsion Set"),
-        ("TorsionDriveDataset", "OpenFF Primary Benchmark 2 Torsion Set"),
-        ("TorsionDriveDataset", "OpenFF Primary TorsionDrive Benchmark 1"),
-        ("TorsionDriveDataset", "OpenFF Substituted Phenyl Set 1"),
-        ("TorsionDriveDataset", "OpenFF Rowley Biaryl v1.0"),
-        ("OptimizationDataset", "FDA Optimization Dataset 1"),
-        ("OptimizationDataset", "Kinase Inhibitors: WBO Distributions"),
-        ("OptimizationDataset", "OpenFF Discrepancy Benchmark 1"),
-        ("OptimizationDataset", "OpenFF Ehrman Informative Optimization v0.2"),
-        ("OptimizationDataset", "OpenFF Full Optimization Benchmark 1"),
-        ("OptimizationDataset", "OpenFF Gen 2 Opt Set 1 Roche"),
-        ("OptimizationDataset", "OpenFF Gen 2 Opt Set 2 Coverage"),
-        ("OptimizationDataset", "OpenFF Gen 2 Opt Set 3 Pfizer Discrepancy"),
-        ("OptimizationDataset", "OpenFF Gen 2 Opt Set 4 eMolecules Discrepancy"),
-        ("OptimizationDataset", "OpenFF Gen 2 Opt Set 5 Bayer"),
-        ("OptimizationDataset", "OpenFF NCI250K Boron 1"),
-        ("OptimizationDataset", "OpenFF Optimization Set 1"),
-        ("OptimizationDataset", "OpenFF Primary Optimization Benchmark 1"),
-        ("OptimizationDataset", "OpenFF VEHICLe Set 1"),
-        ("OptimizationDataset", "Pfizer Discrepancy Optimization Dataset 1"),
-        ("OptimizationDataset", "OpenFF Protein Fragments v1.0"),
     ]
 
-    # openff_qcarchive_datasets_default = [
-    #     ('OptimizationDataset', 'OpenFF Gen 2 Opt Set 2 Coverage'),
-    #     ("TorsionDriveDataset", 'OpenFF Group1 Torsions'),
-    #     ("TorsionDriveDataset", 'OpenFF Group1 Torsions 2'),
-    #     ("TorsionDriveDataset", 'OpenFF Group1 Torsions 3'),
-    #     ("TorsionDriveDataset", 'OpenFF Primary Benchmark 1 Torsion Set'),
-    #     ("TorsionDriveDataset", 'OpenFF Primary Benchmark 2 Torsion Set'),
-    #     ("TorsionDriveDataset", 'OpenFF Primary TorsionDrive Benchmark 1'),
-    # ]
 
     cache_dir = "."
 
@@ -113,7 +64,7 @@ class QCArchiveSpellBook:
             for index, row in client.list_collections().iterrows():
                 for skip_set in self.openff_qcarchive_datasets_skip:
                     if skip_set[1] == index[1]:
-                        print("Skipping", index)
+                        print("Skipping", index, "because it is in the blacklist")
                         continue
                 if "OpenFF" in index[1] and index[0] != "Dataset":
                     sets.append(index)

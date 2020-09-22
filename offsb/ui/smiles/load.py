@@ -408,9 +408,9 @@ def main():
         pool.close()
 
     fid.write("Totals:\n")
-    fid.write("  Inputs:       {}\n".format(entries))
-    fid.write("  Isomers:       {}\n".format(isomers))
-    fid.write("  Conformations: {}\n".format(conformations))
+    fid.write("  Inputs:        {:8d}\n".format(entries))
+    fid.write("  Isomers:       {:8d}\n".format(isomers))
+    fid.write("  Conformations: {:8d}\n".format(conformations))
 
     if args.output_file is not None and fid is not sys.stdout:
         fid.close()
