@@ -4,36 +4,37 @@ import pickle
 import sys
 
 import numpy as np
-import qcfractal.interface as ptl
-import simtk.unit
-from openmmtools.utils import quantity_from_string
 
 import offsb
 import offsb.qcarchive.qcatree as qca
+import qcfractal.interface as ptl
+import simtk.unit
+from openmmtools.utils import quantity_from_string
 
 
 def load_dataset_input(fnm):
     datasets = [
         tuple([line.split()[0], " ".join(line.strip("\n").split()[1:])])
-        for line in open(fnm).readlines() if not line.lstrip().startswith("#")
+        for line in open(fnm).readlines()
+        if not line.lstrip().startswith("#")
     ]
     return datasets
 
 
 class QCArchiveSpellBook:
 
-    # blacklists
+    # OpenFF datasets (but not named as such)
     openff_qcarchive_datasets_bad_name = [
         ("OptimizationDataset", "FDA Optimization Dataset 1"),
         ("OptimizationDataset", "Kinase Inhibitors: WBO Distributions"),
         ("OptimizationDataset", "Pfizer Discrepancy Optimization Dataset 1"),
     ]
+
+    # blacklists
     openff_qcarchive_datasets_skip = [
         ("OptimizationDataset", "OpenFF Ehrman Informative Optimization v0.1")
     ]
-    openff_qcarchive_datasets_default = [
-    ]
-
+    openff_qcarchive_datasets_default = []
 
     cache_dir = "."
 
@@ -267,6 +268,7 @@ class QCArchiveSpellBook:
         for i, (file, oldfile) in enumerate(zip(files, old_files)):
 
             with open(file) as f:
+                valid = False
                 for line in f:
                     tokens = line.split()
                     if tokens[0] != "#JSON":
@@ -274,8 +276,15 @@ class QCArchiveSpellBook:
                     name = tokens[1]
                     js = "".join(tokens[2:])
                     meta[name] = json.loads(js)
+                    valid = True
+
+            if not valid:
+                continue
 
             dat = np.loadtxt(file)
+
+            if len(dat) == 0:
+                continue
 
             oldmeta = None
 
@@ -488,6 +497,7 @@ class QCArchiveSpellBook:
                     entry_node, select="Molecule"
                 )
 
+                all_vals = {}
                 for mol_node in mol_nds:
 
                     constr = [
@@ -523,10 +533,28 @@ class QCArchiveSpellBook:
                             atom_key_id = atom_key
 
                         val = op_vals[atom_key][0] * convert
-                        rec = [i, angle, atom_key_id, val]
-                        records.append(rec)
+                        all_vals.setdefault(atom_key_id, []).append(val)
+                        rec = [
+                            int(td_node.payload.split("-")[1]),
+                            angle,
+                            atom_key_id,
+                            val,
+                        ]
                         # print(rec)
-                        f.write("{:6d} {:7.2f} {} {:12.8f}\n".format(*rec))
+                        f.write("{:d} {:7.2f} {} {:12.8f}\n".format(*rec))
+                if len(all_vals) > 0:
+                    for key, vals in all_vals.items():
+                        vals = np.array(vals)
+                        rec = [
+                            int(td_node.payload.split("-")[1]),
+                            key,
+                            vals.min(),
+                            vals.mean(),
+                            vals.max(),
+                        ]
+                        f.write(
+                            "#STATS {:d} {} _±¯ {:12.8} {:12.8f} {:12.8f}\n".format(*rec)
+                        )
 
             param_records[param] = records
             if f != sys.stdout:

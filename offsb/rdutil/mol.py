@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 from rdkit import Chem
-from rdkit.Chem import AllChem
-from rdkit.Chem import FragmentMatcher
 from rdkit import Geometry as RDGeom
-from ..tools import const
+from rdkit.Chem import AllChem, FragmentMatcher
 from rdkit.Chem.rdchem import Conformer
+
+from ..tools import const
 
 
 def atom_map(mol):
@@ -13,9 +13,12 @@ def atom_map(mol):
         if v == 0:
             return None
     return map_idx
+
+
 def atom_map_invert(map_idx):
     inv = [(map_idx[i] - 1) for i in range(len(map_idx))]
     return inv
+
 
 def build_from_smiles(smiles_pattern):
     mol = Chem.MolFromSmiles(smiles_pattern, sanitize=False)
@@ -28,6 +31,7 @@ def build_from_smiles(smiles_pattern):
     Chem.SetAromaticity(mol, Chem.AromaticityModel.AROMATICITY_MDL)
     Chem.SanitizeMol(mol, Chem.SanitizeFlags.SANITIZE_SETAROMATICITY)
     return mol
+
 
 def embed_qcmol_3d(mol, qcmol):
 
@@ -44,6 +48,7 @@ def embed_qcmol_3d(mol, qcmol):
     ret = mol.AddConformer(conf, assignId=True)
     # not sure if this can fail, so just accept anything
     return ret
+
 
 def rdmol_from_smiles_and_qcmol(smiles_pattern, qcmol):
 
