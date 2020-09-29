@@ -302,7 +302,7 @@ def main():
             "-f",
             "--formatted-out",
             type=str,
-            help="Write all molecules to a formatted output as qc_schema molecules.  Assumes singlets! Choose either --json or --msgpack as the  the format",
+            help="Write all molecules to a formatted output as qc_schema molecules.  Assumes singlets! Choose either --json, --qcsubmit, or --msgpack as the  the format",
             )
 
     parser.add_argument(
@@ -310,6 +310,11 @@ def main():
             "--json",
             action="store_true",
             help="Write the formatted output to qc_schema (json) format.",
+            )
+    parser.add_argument(
+            "--qcsubmit",
+            action="store_true",
+            help="Create and ",
             )
 
     parser.add_argument(
