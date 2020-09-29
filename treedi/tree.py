@@ -112,7 +112,9 @@ class Tree(ABC):
     """
 
     def __init__(self, name, root_payload=None, node_index=None, db=None,
-        index=None, payload=None):
+        index=None, payload=None, dereference=False):
+
+        self.dereference = dereference
 
         if db is not None:
             self.db = db
@@ -212,7 +214,11 @@ class Tree(ABC):
         return self[self.root_index]
 
     def __setitem__(self, k, v):
-        self.node_index[k] = v
+        if self.dereference:
+            self.db[self.node_index[k]]['data'] = v
+            self.db[self.node_index[k]]['type'] = type(v)
+        else:
+            self.node_index[k] = v
 
     def __getitem__(self, k):
         return self.node_index[k]
@@ -276,10 +282,23 @@ class Tree(ABC):
         if isinstance(self.root, str):
             self.root = self[self.root]
 
+    def _yield(self, v):
+        if self.dereference:
+            # TODO Make sure all nodes store something in the db
+            ret = self.db.get(v.payload, {}).get('data')
+            if ret:
+                # TODO Save the proper info the build the data
+                # obj_type = self.db.get(v.payload, {}).get('type')
+                # if type(ret) == dict and obj_type:
+                #     ret = obj_type.ret)
+                yield ret
+        else:
+            yield v
+
     def yield_if_single(self, v, select, state):
         if select is None or select == v.name:
             if state is None or state == v.state:
-                yield v
+                yield from self._yield(v)
 
     def yield_if(self, v, select, state):
         if hasattr(v, "__iter__"):
@@ -303,7 +322,7 @@ class Tree(ABC):
 
     def node_iter_breadth_first_single(self, v, select=None, state=None):
         if v.parent is None:
-            yield v
+            self._yield(v)
         for c in v.children:
             c = self[c]
             yield from self.yield_if(c, select, state)
@@ -368,39 +387,15 @@ class PartitionTree(Tree):
         Importantly, partition trees are not trees... 
         They are a dictionary, where it copies the source tree index as keys,
         and puts data in there
-
-        so if the index has node.index -> '4', and QCATree sets node.payload -> 2234521
-        QCA -> { 2234521 : { meta : obj, data : obj }}
-
-        then partition has { '2234521' : { meta: obj, data : obj }} 
-
-        so this means we have 3 objects:
-            the index
-            the QCA data
-            the paritition data
-
-        and are separate.
     """
 
     def __init__(self, source_tree, name):
         self.source = source_tree
 
         self.verbose = True
-        # nodes = {node.index: node for node in [node.skel() for node in source_tree.node_index.values()]}
-        # self.node_index = source_tree.node_index
-        # for node in nodes.values():
-        #    print( node, node.children)
-        #    for v in source_tree.node_index.get( node.index).children:
-        #        #print("Connecting ", node)
-        #        #print("            to ", nodes.get( v.index))
-        #        v = nodes.get( v.index)
-        #        print( v)
 
-        #        node.add( v)
         super().__init__(node_index=source_tree.node_index, name=name)
         self.logger.debug("Building PartitionTree {}".format(name))
-        # [self.register_modified(node) for node in self.node_index.values()]
-        # source_tree.link_tree(self)
 
     def to_pickle(self, name=None, index=False, db=True):
         import pickle
@@ -422,37 +417,7 @@ class PartitionTree(Tree):
 
     def to_pickle_str(self):
         import pickle
-
-        self.isolate()
         return pickle.dumps(self)
-
-    #    def to_pickle( self, db=False, name=None):
-    #        import pickle
-    #        if name is None:
-    #            name = self.name + ".p"
-    #        #self.isolate()
-    #        with open( name, 'wb') as fid:
-    #            pickle.dump( self, fid)
-
-    def isolate(self):
-        pass
-        # for ID in self.node_index:
-        #    node = self.node_index.get( ID)
-        #    if node.parent is not None:
-        #        if not isinstance(node.parent, str):
-        #            node.parent = node.parent.index
-        #    for i,_ in enumerate( node.children):
-        #        if not isinstance(node.children[i], str):
-        #            node.children[i] = node.children[i].index
-        # if not isinstance( self.root, str):
-        #    self.root = self.root.index
-        # if not isinstance( self.source, str):
-        #    self.source = self.source.name
-
-    def associate(self, source):
-        self.assemble()
-        source.link_tree(self)
-        self.root = self.node_index.get(self.root.index)
 
     def apply(self):
         pass
@@ -495,7 +460,6 @@ class TreeOperation(PartitionTree):
             if tgt == "debug":
                 if ret != "":
                     self.logger.debug(ret)
-                
 
     def _unpack_work(self, work, exceptions_are_fatal=True):
 
