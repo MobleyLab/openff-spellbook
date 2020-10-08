@@ -216,21 +216,59 @@ def submit_qca_optimization_dataset(
     Parameters
     ----------
     dataset_name : str
-        The name of the dataset. This is needed if the dataset already exists and no metadata is supplied. Useful when e.g. adding computes or molecules to an existing dataset.
+        The name of the dataset. This is needed if the dataset already exists and no
+        metadata is supplied. Useful when e.g. adding computes or molecules to an existing dataset.
+
     metadata : str
         A filename specifying the metadata needed to create a new dataset, in JSON format.
+        An example metadata has the following format:
+        {
+            "submitter": "trevorgokey",
+            "creation_date": "2020-09-18",
+            "collection_type": "OptimizationDataset",
+            "dataset_name": "OpenFF Sandbox CHO PhAlkEthOH v1.0",
+            "short_description": "A diverse set of CHO molecules",
+            "long_description_url": "https://github.com/openforcefield/qca-dataset-submission/tree/master/submissions/2020-09-18-OpenFF-Sandbox-CHO-PhAlkEthOH",
+            "long_description": "This dataset contains an expanded set of the AlkEthOH and
+            PhEthOH datasets, which were used in the original derivation of the smirnoff99Frosst
+            parameters.",
+            "elements": [
+                "C",
+                "H",
+                "O"
+            ],
+            "change_log": [
+                {"author": "trevorgokey",
+                 "date": "2020-09-18",
+                 "version": "1.0",
+                 "description": "A diverse set of CHO molecules. The molecules in this set were
+                 generated to include all stereoisomers if chirality was ambiguous from the SMILES
+                 input. Conformations were generated which had an RMSD of at least 4 Angstroms from
+                 all other conformers"
+                }
+            ]
+        }
+
     compute_spec : str
         A filename specifying the compute specifications for the dataset, in JSON format.
+
     input_molecules : str
         A filename specifying the molecules to load into the dataset as entries, in JSON format.
+
     server : str
-        The server URI to connect to. The special value 'from_file' will read from the default server connection config file for e.g. authentication
+        The server URI to connect to. The special value 'from_file' will read from the default
+        server connection config file for e.g. authentication
+
     threads : int
         The number of threads to use to when contacting the server.
+
     compute_tag : str
-        The compute tag used to match computations with compute managers. For OpenFF calculations, this should be "openff"
+        The compute tag used to match computations with compute managers. For OpenFF calculations,
+        this should be "openff"
+
     priorty : str
         The priority of new calculations to submit. This must be either "low", "normal", or "high".
+
     skip_compute : bool
         Do not submit the tasks after the molecules and compute specifications have been added
 
@@ -375,7 +413,11 @@ def main():
     parser.add_argument(
         "--input-molecules",
         type=str,
-        help="A JSON file which contains the QCSchema ready for submission. The json should be a list at the top-level, containing dictionaries with a name as a key, and the value a list of QCMolecules representing the different conformations of the same molecule. Note that entry data, e.g. the CMILES info, should not be specified here as it is generated automatically from this input.",
+        help="A JSON file which contains the QCSchema ready for submission. The json should be a "
+        "list at the top-level, containing dictionaries with a name as a key, and the value a list "
+        "of QCMolecules representing the different conformations of the same molecule. Note that "
+        "entry data, e.g. the CMILES info, should not be specified here as it is generated "
+        "automatically from this input.",
     )
 
     parser.add_argument(
@@ -399,12 +441,15 @@ def main():
     parser.add_argument(
         "--dataset-name",
         type=str,
-        help="The name of the dataset. This is needed if the dataset already exists and no metadata is supplied. Useful when e.g. adding computes or molecules to an existing dataset.",
+        help="The name of the dataset. This is needed if the dataset already exists and no "
+        "metadata is supplied. Useful when e.g. adding computes or molecules to an existing "
+        "dataset.",
     )
     parser.add_argument(
         "--server",
         type=str,
-        help="The server to connect to. The special value 'from_file' will read from the default server connection config file for e.g. authentication",
+        help="The server to connect to. The special value 'from_file' will read from the default "
+        "server connection config file for e.g. authentication",
     )
 
     parser.add_argument(
@@ -418,12 +463,14 @@ def main():
         "--compute-tag",
         type=str,
         default=None,
-        help="The compute tag used to match computations with compute managers. For OpenFF calculations, this should be 'openff'",
+        help="The compute tag used to match computations with compute managers. For OpenFF "
+        "calculations, this should be 'openff'",
     )
     parser.add_argument(
         "--skip-compute",
         action="store_true",
-        help="Do not submit the tasks after the molecules and compute specifications have been added",
+        help="Do not submit the tasks after the molecules and compute specifications have been "
+        "added",
     )
 
     parser.add_argument(
