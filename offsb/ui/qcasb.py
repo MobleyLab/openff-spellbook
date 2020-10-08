@@ -685,7 +685,7 @@ class QCArchiveSpellBook:
                         pass
                     if hasstat:
                         status = QCA.db[node.payload]["data"]["status"][:]
-                        if status != "COMPLETE" and node.name == "Optimization":
+                        if status == "ERROR" and node.name == "Optimization":
                             try:
                                 statbar = "----"
                                 qcp = QCA.db[node.payload]["data"]
@@ -695,9 +695,9 @@ class QCArchiveSpellBook:
                                 errtype = ""
                                 xyzerrmsg = ""
                                 if not (qcp["error"] is None):
-                                    err = list(
+                                    err = json.loads(list(
                                         client.query_kvstore(int(qcp["error"])).values()
-                                    )[0]
+                                    )[0].dict()['data'].decode())
                                     errmsg += "####ERROR####\n"
                                     errmsg += "Error type: " + err["error_type"] + "\n"
                                     errmsg += "Error:\n" + err["error_message"]
@@ -737,6 +737,11 @@ class QCArchiveSpellBook:
                                         in err["error_message"]
                                     ):
                                         errtype = "needsrestart-daskkilled"
+                                    elif (
+                                        "struct.error: unpack requires a buffer of"
+                                        in err["error_message"]
+                                    ):
+                                        errtype = "needsrestart-anistructunpack"
                                     elif (
                                         "concurrent.futures.process.BrokenProcessPool"
                                         in err["error_message"]
@@ -871,7 +876,7 @@ class QCArchiveSpellBook:
                                     errmsg += msg
                                     errmsg += "#############\n"
                             except Exception as e:
-                                fid.write("Internal issue:\n" + str(e) + "\n")
+                                fid.write("Internal issue:\n" + str(type(e)) + "\n" + str(e) + "\n")
 
                         if status != "COMPLETE" and node.name == "TorsionDrive":
                             statbar = "XXXX"
