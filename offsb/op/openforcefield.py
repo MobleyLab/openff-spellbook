@@ -25,6 +25,9 @@ from offsb.tools.util import flatten_list
 
 from treedi.tree import DEFAULT_DB
 
+class _DummyTree:
+    __slots__ = ["source"]
+
 class OpenForceFieldTreeBase(treedi.tree.TreeOperation, abc.ABC):
 
     def __init__(self, source_tree, name, filename=None ):
@@ -99,16 +102,20 @@ class OpenForceFieldTreeBase(treedi.tree.TreeOperation, abc.ABC):
         """
         return
 
-    def _generate_apply_kwargs(self, i, target, kwargs={}):
+    def _generate_apply_kwargs(self, i, target, kwargs=None):
 
         # labels = self.source.db[target.payload]["data"]
         entry = self.source.source.db[target.payload]["data"]
 
         out_str = ""
 
-        mol = kwargs.get('mol')
+        if kwargs is None:
+            kwargs = {}
 
-        if mol is None:
+        qcmol = kwargs.get('qcmol')
+        smi = kwargs.get('smi')
+
+        if qcmol is None or smi is None:
             smi = entry.attributes["canonical_isomeric_explicit_hydrogen_mapped_smiles"]
             if "initial_molecule" in entry.dict():
                 qcid = entry.dict()["initial_molecule"]
@@ -135,16 +142,15 @@ class OpenForceFieldTreeBase(treedi.tree.TreeOperation, abc.ABC):
                 out_str += "{:d} initial mol was empty: {:s}".format(i, str(qcmolid))
                 return {"error": out_str}
 
-            mol = offsb.rdutil.mol.rdmol_from_smiles_and_qcmol(smi, qcmol)
-            kwargs['mol'] = mol
+            kwargs['smi'] = smi
+            kwargs['qcmol'] = qcmol
 
-        
         masks = kwargs.get('masks')
         if masks is None:
             obj = self.source.db[self.source[target.index].payload]
             masks = obj["data"]
-
             kwargs['masks'] = flatten_list([v for v in masks.values()], times=1)
+
 
 
         kwargs.update({"name": self.name, "entry": str(entry)})
@@ -175,23 +181,30 @@ class OpenForceFieldTreeBase(treedi.tree.TreeOperation, abc.ABC):
 
         self.db[self.source.root().payload]['data'].update(ret[2])
 
-    def apply_single(self, i, target, kwargs):
+    def apply_single(self, i, target, **kwargs):
 
         out_str = ""
         all_labels = {}
         out_dict = {}
+        smi = kwargs['smi']
+        # qcmol = kwargs['qcmol']
+        # mol = kwargs.get('mol')
+        mmol = kwargs.get('mmol')
 
         labels = kwargs.get('labels')
         if labels is None:
-            mol = kwargs['mol']
+            # mol = kwargs['mol']
             # map_idx = {a.GetIdx(): a.GetAtomMapNum() for a in mol.GetAtoms()}
-            with io.StringIO() as f:
-                with contextlib.redirect_stderr(f):
-                    mmol = oFF.topology.Molecule.from_rdkit(mol,
-                            allow_undefined_stereo=True)
-                for line in f:
-                    if 'not error because allow_undefined_stereo' not in line:
-                        print(line)
+            if mmol is None:
+                with io.StringIO() as f:
+                    with contextlib.redirect_stderr(f):
+                        # mmol = oFF.topology.Molecule.from_rdkit(mol,
+                        #         allow_undefined_stereo=True)
+                        mmol = oFF.topology.Molecule.from_smiles(smi,
+                                allow_undefined_stereo=True)
+                    for line in f:
+                        if 'not error because allow_undefined_stereo' not in line:
+                            print(line)
 
             # just skip molecules that oFF can't handle for whatever reason
             try:
@@ -231,9 +244,8 @@ class OpenForceFieldTreeBase(treedi.tree.TreeOperation, abc.ABC):
         if key not in all_labels:
             all_labels.update({key: {}})
 
-        mol = kwargs['mol']
-        map_idx = {a.GetIdx(): a.GetAtomMapNum() for a in mol.GetAtoms()}
-        map_inv = {v-1:k for k,v in map_idx.items()}
+        # map_idx = {a.GetIdx(): a.GetAtomMapNum() for a in mol.GetAtoms()}
+        # map_inv = {v-1:k for k,v in map_idx.items()}
 
         masks = kwargs['masks']
         if masks is None:
@@ -241,7 +253,7 @@ class OpenForceFieldTreeBase(treedi.tree.TreeOperation, abc.ABC):
         else:
             if isinstance(masks, dict):
                 masks = masks[key]
-            masks_sorted = masks #[sorted(k) for k in masks]
+            masks_sorted = masks # [sorted(k) for k in masks]
 
         for mask in map(tuple, masks_sorted):
             
@@ -393,16 +405,15 @@ class OpenForceFieldTree(OpenForceFieldTreeBase):
         for field, obj in zip(self._fields, types):
             setattr(self, field, obj.from_forcefield(*args, field))
         
-        class DummyTree:
-            __slots__ = ["source"]
 
 
         # workaround since this Operation does not interface through
         # a partition (maybe make a TreeFunction that is both an operation
         # and a partition?
         source = self.source
-        self.source = DummyTree
+        self.source = _DummyTree
         self.source.source = source
+        self.processes = None
 
     def op(self, node, partition):
         pass
@@ -439,11 +450,14 @@ class OpenForceFieldTree(OpenForceFieldTreeBase):
                 self.db[root.payload]['data'][k] = DEFAULT_DB()
             self.db[root.payload]['data'][k].update(v)
 
-    def _generate_apply_kwargs(self, i, target, kwargs={}):
+    def _generate_apply_kwargs(self, i, target, kwargs=None):
         """
         Generate the labels, keep in kwargs
 
         """
+
+        if kwargs is None:
+            kwargs = {}
 
         entry = self.source.source.db[target.payload]["data"]
         self.logger.debug("Pulled entry {}".format(target) )
@@ -451,63 +465,53 @@ class OpenForceFieldTree(OpenForceFieldTreeBase):
 
         out_str = ""
 
-        mol = kwargs.get('mol')
+        # we skip using 3D since labeling does not depend on coordinates
+        # qcmol = kwargs.get('qcmol')
+        smi = kwargs.get('smi')
 
         CIEHMS = "canonical_isomeric_explicit_hydrogen_mapped_smiles"
-        if mol is None:
+        # if qcmol is None or smi is None:
+        if smi is None:
             smi = entry.attributes[CIEHMS]
-            self.logger.debug("Creating mol with CIEHMS " + smi)
-            if "initial_molecule" in entry.dict():
-                qcid = entry.dict()["initial_molecule"]
-            elif "initial_molecules" in entry.dict():
-                qcid = entry.dict()["initial_molecules"]
-            else:
-                qid = str(qcid)
-                out_str += "{:d} initial mol was empty: {:s}".format(i, qid)
-                return {"error": out_str}
+            # self.logger.debug("Creating mol with CIEHMS " + smi)
+            # if "initial_molecule" in entry.dict():
+            #     qcid = entry.dict()["initial_molecule"]
+            # elif "initial_molecules" in entry.dict():
+            #     qcid = entry.dict()["initial_molecules"]
+            # else:
+            #     qid = str(qcid)
+            #     out_str += "{:d} initial mol was empty: {:s}".format(i, qid)
+            #     return {"error": out_str}
 
-            if isinstance(qcid, set):
-                qcid = list(qcid)
-            if isinstance(qcid, list):
-                qcid = str(qcid[0])
+            # if isinstance(qcid, set):
+            #     qcid = list(qcid)
+            # if isinstance(qcid, list):
+            #     qcid = str(qcid[0])
 
-            qcmolid = "QCM-" + qcid
+            # qcmolid = "QCM-" + qcid
 
-            if qcmolid not in self.source.source.db:
-                qid = str(qcmolid)
-                out_str += "{:d} initial mol was empty: {:s}".format(i, qid)
-                return {"error": out_str}
+            # if qcmolid not in self.source.source.db:
+            #     qid = str(qcmolid)
+            #     out_str += "{:d} initial mol was empty: {:s}".format(i, qid)
+            #     return {"error": out_str}
 
-            if "data" in self.source.source.db.get(qcmolid):
-                qcmol = self.source.source.db.get(qcmolid).get("data")
-            else:
-                qid = str(qcmolid)
-                out_str += "{:d} initial mol was empty: {:s}".format(i, qid)
-                return {"error": out_str}
-            shape = str(qcmol['geometry'].shape)
-            self.logger.debug("Molecule shape is {}".format(shape))
-            mol = offsb.rdutil.mol.rdmol_from_smiles_and_qcmol(smi, qcmol)
-            kwargs['mol'] = mol
+            # if "data" in self.source.source.db.get(qcmolid):
+            #     qcmol = self.source.source.db.get(qcmolid).get("data")
+            # else:
+            #     qid = str(qcmolid)
+            #     out_str += "{:d} initial mol was empty: {:s}".format(i, qid)
+            #     return {"error": out_str}
+            # shape = str(qcmol['geometry'].shape)
+            # self.logger.debug("Molecule shape is {}".format(shape))
+            kwargs['smi'] = smi
+            # kwargs['qcmol'] = qcmol
         else:
             o = "Molecule already present. Skipping creation"
             self.logger.debug(o)
 
-        
-        masks = kwargs.get('masks')
-        if masks is None:
-            masks = {}
-            for field in self._fields:
-                term = getattr(self, field)
-                obj = term.source.db[target.payload]
-
-                m = flatten_list([v for v in obj["data"].values()], times=1)
-                masks[term._key] = m
-
-            kwargs['masks'] = masks
 
         # This calls Base, which collects the molecule
         # kwargs = super()._generate_apply_kwargs(i, target, kwargs)
-        
         # The point of generating kwargs is to avoid pickling self
         # for parallel exe
 
@@ -515,27 +519,49 @@ class OpenForceFieldTree(OpenForceFieldTreeBase):
         # since not doing so will cause a pickle of the FF which
         # is larger and more complex.
 
-        mol = kwargs['mol']
+        masks = kwargs.get('masks')
+        if masks is None:
+            masks = {}
+            for field in self._fields:
+                term = getattr(self, field)
+                obj = term.source.db[target.payload]
+
+                masks[term._key] = obj
+
+            kwargs['masks'] = masks
 
         # FF and smiles searches are on chemical index, so no mapping needed
         # map_idx = {a.GetIdx(): a.GetAtomMapNum() for a in mol.GetAtoms()}
+        return kwargs
 
+    def apply_single(self, i, target, **kwargs):
 
-        lvl = logging.getLogger("openforcefield").getEffectiveLevel()
-        logging.getLogger("openforcefield").setLevel(logging.ERROR)
-        with io.StringIO() as f:
-            with contextlib.redirect_stderr(sys.stdout):
-                with contextlib.redirect_stdout(f):
-                    mmol = oFF.topology.Molecule.from_rdkit(mol,
-                            allow_undefined_stereo=True)
-                for line in f:
-                    if 'not error because allow_undefined_stereo' not in line:
-                        print(line)
-        logging.getLogger("openforcefield").setLevel(lvl)
+        out_str = ""
+        all_labels = DEFAULT_DB()
+        out_dict = DEFAULT_DB()
+
+        smi = kwargs['smi']
+        # qcmol = kwargs['qcmol']
+        # mol = offsb.rdutil.mol.rdmol_from_smiles_and_qcmol(smi, qcmol)
+
+        # lvl = logging.getLogger("openforcefield").getEffectiveLevel()
+        # logging.getLogger("openforcefield").setLevel(logging.ERROR)
+        # with io.StringIO() as f:
+        #     with contextlib.redirect_stderr(sys.stdout):
+        #         with contextlib.redirect_stdout(f):
+        mmol = oFF.topology.Molecule.from_smiles(smi,
+                allow_undefined_stereo=True)
+                    # mmol = oFF.topology.Molecule.from_rdkit(mol,
+                    #         allow_undefined_stereo=True)
+                # for line in f:
+                #     if 'not error because allow_undefined_stereo' not in line:
+                #         print(line)
+        # logging.getLogger("openforcefield").setLevel(lvl)
         # mmol = oFF.topology.Molecule.from_rdkit(
         #     mol, allow_undefined_stereo=True)
 
         # just skip molecules that oFF can't handle for whatever reason
+
         try:
             top = oFF.topology.Topology.from_molecules(mmol)
         except AssertionError as e:
@@ -543,21 +569,10 @@ class OpenForceFieldTree(OpenForceFieldTreeBase):
             out_str += "FAILED TO BUILD OFF MOL:\n"
             out_str += str(e)
             # pdb.set_trace()
-            kwargs['error'] = out_str
-            return kwargs
+            out_dict['error'] = out_str
+            return out_dict
 
         labels = self.forcefield.label_molecules(top)[0]
-
-        kwargs['labels'] = labels
-
-        return kwargs
-
-    def apply_single(self, i, target, kwargs):
-
-        out_str = ""
-        all_labels = DEFAULT_DB()
-        out_dict = DEFAULT_DB()
-
 
         # calculations inside of a calculation....
 
@@ -569,11 +584,30 @@ class OpenForceFieldTree(OpenForceFieldTreeBase):
                 "error": kwargs['error']
             }
 
+        subkwargs = kwargs.copy()
+        subkwargs['labels'] = labels
+        subkwargs['mmol'] = mmol
+
+        masks = kwargs.get('masks')
+        if masks is not None:
+            for key in masks:
+                obj = masks[key]
+                # m = flatten_list([v for v in obj["data"].values()], times=1)
+
+                m = flatten_list([v for v in obj["data"].values()], times=1)
+                masks[key] = m
+
+        subkwargs['masks'] = masks
+
+
         for field in self._fields:
             term = getattr(self, field)
-            self.logger.debug("Parameter {} begin".format(type(term)))
+            # obj = kwargs['masks'][term._key]
+
+            # self.logger.debug("Parameter {} begin".format(type(term)))
             out_dict[term._key] = DEFAULT_DB()
-            ret = term.apply_single(i, target, kwargs)
+
+            ret = term.apply_single(i, target, **subkwargs)
             
             # maybe skipping this line will allow us to keep only one copy
             #term._unpack_result(ret['return'])

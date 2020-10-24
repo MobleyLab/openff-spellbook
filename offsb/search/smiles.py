@@ -10,6 +10,7 @@ from rdkit.Chem import AllChem
 from rdkit.Chem import FragmentMatcher
 import offsb.rdutil.mol
 import logging
+import tqdm
 
 DEFAULT_DB = Tree.DEFAULT_DB
 
@@ -19,8 +20,8 @@ class SmilesSearchTree(Tree.PartitionTree):
     """
 
 
-    def __init__(self, smiles, source_tree, name):
-        super().__init__(source_tree, name)
+    def __init__(self, smiles, source_tree, name, verbose=True):
+        super().__init__(source_tree, name, verbose=verbose)
         self.smiles = smiles
         if hasattr(smiles, "__iter__") and isinstance(smiles[0], str):
             self.smiles = [smiles]
@@ -31,6 +32,8 @@ class SmilesSearchTree(Tree.PartitionTree):
             targets = self.source.iter_entry()
         elif not hasattr(targets, "__iter__"):
             targets = [targets]
+
+        targets = list(targets)
         # frag = self.smiles
         # p = FragmentMatcher.FragmentMatcher()
         # p = FragmentMatcher.FragmentMatcher()
@@ -52,7 +55,7 @@ class SmilesSearchTree(Tree.PartitionTree):
             mol_hits[smi] = 0
 
         CIEHMS = 'canonical_isomeric_explicit_hydrogen_mapped_smiles'
-        for target in targets:
+        for target in tqdm.tqdm(targets, total=len(targets), ncols=80, desc="SMARTS Search", disable=not self.verbose):
             # print("Entry", target, target.payload, self[target.parent])
             # print("Specs", len(list(
             #   self.source.node_iter_depth_first(

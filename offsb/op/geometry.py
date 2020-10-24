@@ -18,7 +18,9 @@ class GeometryOperation(treedi.tree.TreeOperation, ABC):
     def apply(self, targets=None):
         super().apply(self._select, targets=targets)
 
-    def _generate_apply_kwargs(self, i, target, kwargs={}):
+    def _generate_apply_kwargs(self, i, target, kwargs=None):
+        if kwargs is None:
+            kwargs = {}
         entry = self.source.source.node_iter_to_root(target, select="Entry")
         entry = next(entry)
         entry_node = entry
@@ -74,7 +76,7 @@ class GeometryOperation(treedi.tree.TreeOperation, ABC):
                 "entry": entry_name}
 
     @staticmethod
-    def apply_single(i, target, kwargs=None):
+    def apply_single(i, target, **kwargs):
 
         if kwargs is None:
             raise Exception("Geometry operation not given necessary config")
@@ -243,7 +245,7 @@ class TorsionOperation(GeometryOperation):
         trajectories (MxNxD)
         """
         
-        p = mol[idx]
+        p = mol[list(idx)]
         p0 = p[0]
         p1 = p[1]
         p2 = p[2]
@@ -285,6 +287,7 @@ class TorsionOperation(GeometryOperation):
         trajectories (MxNxD)
         """
         
+        breakpoint()
         p = mol[np.newaxis, idx, :]
         p0 = p[:,0]
         p1 = p[:,1]
@@ -321,7 +324,8 @@ class TorsionOperation(GeometryOperation):
         return ret
 
     def op(self, mol, idx):
-        return self.measure_praxeolitic(mol, idx)
+        # return self.measure(mol, idx)
+        return self.measure_praxeolitic_single(mol, idx)
 
 class ImproperTorsionOperation(GeometryOperation):
 

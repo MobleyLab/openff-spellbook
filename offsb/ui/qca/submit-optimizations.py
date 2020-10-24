@@ -2,14 +2,16 @@
 import json
 import logging
 import lzma
+import bz2
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import zip_longest
 from pprint import pformat
 
+import tqdm
+
 import cmiles
 import qcfractal.interface as ptl
-import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -76,15 +78,19 @@ def submit(ds, entry_name, molecule, index):
     # This workaround prevents cmiles from crashing if OE is installed but has
     # no license. Even though rdkit is specified, protomer enumeration is OE-
     # specific and still attempted.
-    oe_flag = cmiles.utils.has_openeye
-    cmiles.utils.has_openeye = False
+    # oe_flag = cmiles.utils.has_openeye
+    # cmiles.utils.has_openeye = False
 
-    attrs = cmiles.generator.get_molecule_ids(molecule, toolkit="rdkit")
 
-    cmiles.utils.has_openeye = oe_flag
+    
+    # attrs = cmiles.generator.get_molecule_ids(molecule, toolkit="rdkit")
+    
+
+    # cmiles.utils.has_openeye = oe_flag
 
     CIEHMS = "canonical_isomeric_explicit_hydrogen_mapped_smiles"
-    molecule["extras"] = {CIEHMS: attrs[CIEHMS]}
+    molecule["extras"] = {CIEHMS: entry_name}
+    attrs = {CIEHMS: entry_name}
 
     unique_id = entry_name + f"-{index}"
 
@@ -145,8 +151,7 @@ def add_compute_specs(ds, specifications):
                 }
             }
 
-            The keys "opt_spec" and "qc_spec" are required by this function,
-            but are not stored in QCA. All of the other key-value pairs, however,
+            The keys "opt_spec" and "qc_spec" are required by this function, but are not stored in QCA. All of the other key-value pairs, however,
             are QCArchive specific and must use appropriate values.
 
             Note that this specification in QCA will replace the keyword dictionary
@@ -335,7 +340,9 @@ def submit_qca_optimization_dataset(
 
         logger.info("\nLoading {} into QCArchive...".format(input_molecules))
         if input_molecules.endswith("lzma") or input_molecules.endswith("xz"):
-            input_ds = json.load(lzma.open(input_molecules, "rb"))
+            input_ds = json.load(lzma.open(input_molecules, "rt"))
+        elif input_molecules.endswith("bz2"):
+            input_ds = json.load(bz2.open(input_molecules, "rt"))
         else:
             input_ds = json.load(open(input_molecules))
 

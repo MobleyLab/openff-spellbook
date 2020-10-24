@@ -82,6 +82,7 @@ class OpenMMEnergy(treedi.tree.PartitionTree):
         self._select = "Molecule"
         self.minimize = False
         self.constrain = False
+        self.geometric = True
         search_pth = list(
             iter_entry_points(group="openforcefield.smirnoff_forcefield_directory")
         )
@@ -452,7 +453,7 @@ class OpenMMEnergy(treedi.tree.PartitionTree):
 
         n_targets = len(targets)
 
-        if self.processes > 1:
+        if self.processes is None or self.processes > 1:
             import concurrent.futures
 
             exe = concurrent.futures.ProcessPoolExecutor(max_workers=self.processes)
@@ -593,7 +594,7 @@ class OpenMMEnergy(treedi.tree.PartitionTree):
         getPositions = self.minimize
         # system = sim.context.getSystem()
         # forces = system.getForces()
-        use_geometric = True
+        use_geometric = self.geometric
         if True and use_geometric and self.minimize:
 
             import geometric.optimize as geoopt

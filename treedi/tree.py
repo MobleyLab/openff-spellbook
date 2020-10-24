@@ -2,6 +2,7 @@ from .node import *
 import collections
 import numpy as np
 from abc import ABC, abstractmethod
+import tqdm
 import os
 import copy
 import warnings
@@ -14,7 +15,8 @@ import logging
 import sys
 
 LOGSTDOUT = logging.StreamHandler(sys.stdout)
-FORMAT="[%(asctime)s] %(levelname)s <%(name)s::%(funcName)s>: %(message)s"
+#FORMAT="[%(asctime)s] %(levelname)s <%(name)s::%(funcName)s>: %(message)s"
+FORMAT="%(message)s"
 logging.basicConfig(format=FORMAT)
 
 def link_iter_depth_first(t):
@@ -56,7 +58,7 @@ class DebugDict(dict):
     def getLogger(self):
         if not (hasattr(self, "_logger") and self._logger is not None):
             self._logger = logging.getLogger("{}".format(id(self)))
-            self._logger.addHandler(LOGSTDOUT)
+            # self._logger.addHandler(LOGSTDOUT)
             self._logger.setLevel(level=logging.DEBUG)
             self._logger.debug("DebugDict online")
 
@@ -112,9 +114,10 @@ class Tree(ABC):
     """
 
     def __init__(self, name, root_payload=None, node_index=None, db=None,
-        index=None, payload=None, dereference=False):
+        index=None, payload=None, dereference=False, verbose=True):
 
         self.dereference = dereference
+        self.verbose = verbose
 
         if db is not None:
             self.db = db
@@ -158,10 +161,9 @@ class Tree(ABC):
         self.ID = ".".join([self.index, self.name])
 
         self.logger = logging.getLogger("{}::{}".format(str(type(self)), self.ID)) 
-        self.logger.addHandler(LOGSTDOUT)
+        # self.logger.addHandler(LOGSTDOUT)
         self.logger.setLevel(level=TREELOGLEVEL)
-        self.logger.debug("Tree online")
-        self.logger.info("Tree database is {}".format(str(type(self.db))))
+        self.logger.debug("Tree database is {}".format(str(type(self.db))))
 
     def to_pickle(self, db=True, index=True, name=None):
 
@@ -389,12 +391,10 @@ class PartitionTree(Tree):
         and puts data in there
     """
 
-    def __init__(self, source_tree, name):
+    def __init__(self, source_tree, name, verbose=True):
         self.source = source_tree
 
-        self.verbose = True
-
-        super().__init__(node_index=source_tree.node_index, name=name)
+        super().__init__(node_index=source_tree.node_index, name=name, verbose=verbose)
         self.logger.debug("Building PartitionTree {}".format(name))
 
     def to_pickle(self, name=None, index=False, db=True):
@@ -424,8 +424,8 @@ class PartitionTree(Tree):
 
 
 class TreeOperation(PartitionTree):
-    def __init__(self, source_tree, name):
-        super().__init__(source_tree, name)
+    def __init__(self, source_tree, name, verbose=True):
+        super().__init__(source_tree, name, verbose=verbose)
         self.logger.debug("This tree is TreeOperation")
 
     @abstractmethod
@@ -447,7 +447,7 @@ class TreeOperation(PartitionTree):
         pass
 
     def _print_result(self, n, n_targets, tgt, ret):
-        print("{:d} / {:d} {:s}".format(n, n_targets, str(tgt)))
+        # print("{:d} / {:d} {:s}".format(n, n_targets, str(tgt)))
         if ret is not None and ret != "":
             self.logger.info(ret)
 
@@ -463,18 +463,15 @@ class TreeOperation(PartitionTree):
 
     def _unpack_work(self, work, exceptions_are_fatal=True):
 
-        import concurrent.futures
-
         n_work = len(work)
-        for n, future in enumerate(concurrent.futures.as_completed(work), 1):
-            if future.done:
-                try:
-                    val = future.result()
-                except RuntimeError as e:
-                    self.logger.error("RUNTIME ERROR; race condition??")
-                    self.logger.error(str(e))
-                    if exceptions_are_fatal:
-                        raise
+        for n, future in tqdm.tqdm(enumerate(work, 1), total=n_work, ncols=80, disable=not self.verbose):
+            try:
+                val = future.get()
+            except RuntimeError as e:
+                self.logger.error("RUNTIME ERROR; race condition??")
+                self.logger.error(str(e))
+                if exceptions_are_fatal:
+                    raise
             if val is None:
                 self.logger.info("data is None?!?")
                 continue
@@ -483,25 +480,25 @@ class TreeOperation(PartitionTree):
 
     def _apply_parallel(self, targets, exceptions_are_fatal=True):
 
-        import concurrent.futures
-
-        exe = concurrent.futures.ThreadPoolExecutor(max_workers=self.processes)
+        from multiprocessing.pool import Pool as Pool
+        exe = Pool(processes=self.processes)
 
         try:
             work = []
-            for i, tgt in enumerate(targets, 1):
+            for i, tgt in tqdm.tqdm(enumerate(targets, 1), ncols=80, desc="Submit", disable=True):
                 kwargs = self._generate_apply_kwargs(i, tgt)
-                task = exe.submit(self.apply_single, i, tgt, kwargs)
+                task = exe.apply_async(self.apply_single, (i, tgt), kwargs)
                 work.append(task)
 
             self._unpack_work(work)
         except Exception as e:
             self.logging.error("Exception!")
             self.logging.error(e)
-            [job.cancel() for job in work]
-            exe.shutdown(wait=False)
+            # for concurrent, use this and shutdown(wait=False) instead
+            # [job.cancel() for job in work]
+            exe.terminate()
         else:
-            exe.shutdown(wait=True)
+            exe.close()
 
     def apply(self, select, targets=None):
         if targets is None:
@@ -527,16 +524,16 @@ class TreeOperation(PartitionTree):
 
         self._apply_initialize(targets)
 
-        if self.processes > 1:
+        if self.processes is None or self.processes > 1:
             self._apply_parallel(targets)
 
         elif self.processes == 1:
 
-            for n, target in enumerate(targets, 1):
+            for n, target in tqdm.tqdm(enumerate(targets, 1), total=len(targets), ncols=80, disable=not self.verbose):
                 o = str(target)
                 self.logger.debug("Begin processing target {}".format(o))
                 kwargs = self._generate_apply_kwargs(n, target, kwargs=DEFAULT_DB())
-                val = self.apply_single(n, target, kwargs)
+                val = self.apply_single(n, target, **kwargs)
                 self._unpack_result_common(val, n, n_targets)
 
         self._apply_finalize(targets)

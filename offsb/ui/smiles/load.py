@@ -1,30 +1,35 @@
 #!/usr/bin/env python3
 
+import contextlib
+import io
 import json
 import logging
 import sys
-import contextlib
-import io
+from multiprocessing import Pool
 
 import msgpack
 import numpy as np
+import tqdm
+
+import lzma
+import bz2
 
 import openforcefield
-import tqdm
 from openforcefield.topology.molecule import Molecule
 from rdkit import Chem
 from rdkit.Chem.EnumerateStereoisomers import EnumerateStereoisomers
-
-from multiprocessing import Pool
+from rdkit.Chem.rdMolAlign import AlignMol
 
 logger = logging.getLogger(__name__)
 # TODO: convert output to use the logger
+
 
 def detect_file_total_data_lines(filename, skip_rows=0):
     N = -skip_rows
     for line in open(filename, "r"):
         N += 1
     return N
+
 
 def parse_file(filename, N, line_start=0, line_end=None, skip_rows=0):
     """
@@ -47,26 +52,33 @@ def parse_file(filename, N, line_start=0, line_end=None, skip_rows=0):
 
     return smi
 
+
 def process_smiles_to_qcschema(lineno, N, header, filename, **kwargs):
 
     out_lines = ""
     out_mols = {}
-    smi_list = parse_file(filename, N, line_start=lineno, line_end=lineno, skip_rows=header)
-    out_lines += "{:8d} / {:8d} ENTRY: {:s}\n".format(lineno+1, N, smi_list[0])
+    smi_list = parse_file(
+        filename, N, line_start=lineno, line_end=lineno, skip_rows=header
+    )
+    out_lines += "{:8d} / {:8d} ENTRY: {:s}\n".format(lineno + 1, N, smi_list[0])
     mols = expand_smiles_to_qcschema(smi_list[0], **kwargs)
 
-    isomers = len(mols)
+    isomers = 0
     conformations = 0
     entries = 1
     for i, (smi, mol_list) in enumerate(mols.items(), 1):
         for mol in mol_list:
+            isomers += 1
             conformations += len(mol.conformers)
-        out_lines += "{:22s}ISOMER {:3d}/{:3d} CONFS: {} SMILES: {:s}\n".format("", i, len(mols), len(mol.conformers), smi)
+            out_lines += "{:22s}ISOMER {:3d}/{:3d} CONFS: {} SMILES: {:s}\n".format(
+                "", i, len(mols), len(mol.conformers), smi
+            )
 
     out_mols.update(mols)
     # out_lines += out
 
     return out_mols, out_lines, (entries, isomers, conformations)
+
 
 def expand_smiles_to_qcschema(
     smi,
@@ -122,42 +134,59 @@ def expand_smiles_to_qcschema(
 
     # this is the main object returned
     molecule_set = {}
-    total_mol = 0
-
-    output = ""
 
     ref_smi = smi
 
     try:
         # If this fails, probably due to stereochemistry. Catch the
         # exception, then enumerate the variations on the SMILES.
-        mol = Molecule.from_smiles(smi)
-        smi_list = [smi]
+        mol = Molecule.from_smiles(smi).to_rdkit()
+
+        smi_list = [mol]
 
     except openforcefield.utils.toolkits.UndefinedStereochemistryError:
 
-        isomers = tuple(EnumerateStereoisomers(Chem.MolFromSmiles(smi)))
-        smi_list = [
-            smi
-            for smi in sorted(
-                Chem.MolToSmiles(x, isomericSmiles=True) for x in isomers
-            )
-        ]
+        smi_list = list(EnumerateStereoisomers(Chem.MolFromSmiles(smi)))
 
         # Clip the isomers here if a limit was specified
         if isomer_max > 0:
             smi_list = smi_list[:isomer_max]
 
+    for i, mol in enumerate(smi_list):
+        smi_list[i] = Chem.AddHs(mol)
+        for atom in smi_list[i].GetAtoms():
+            atom.SetAtomMapNum(atom.GetIdx() + 1)
+
+    smi_list = [
+        smi
+        for smi in sorted(
+            Chem.MolToSmiles(
+                x,
+                isomericSmiles=True,
+                allHsExplicit=True,
+                canonical=True,
+                allBondsExplicit=False,
+            )
+            for x in smi_list
+        )
+    ]
+
     if unique_smiles:
         # we are collecting molecules by their specific stereoisomer SMILES
         for smi in smi_list:
-            molecule_set[smi] = [Molecule.from_smiles(smi)]
+            try:
+                molecule_set[smi] = [Molecule.from_smiles(smi)]
+            except openforcefield.utils.toolkits.UndefinedStereochemistryError:
+                # RDKit was unable to determine chirality? Skip...
+                pass
+
     else:
-        mols = [Molecule.from_smiles(smi) for smi in smi_list]
+        mols = []
+        for smi in smi_list:
+            mols.append(Molecule.from_smiles(smi))
         molecule_set[ref_smi] = mols
 
     for smi in smi_list:
-        initial_mol_N = 0
 
         # Some book keeping to make sure that the stereoisomer SMILES
         # is always printed to the log, but the returned data structure
@@ -168,6 +197,8 @@ def expand_smiles_to_qcschema(
             out_smi = smi
             smi = ref_smi
 
+        if smi not in molecule_set:
+            continue
 
         for mol in molecule_set[smi]:
 
@@ -180,7 +211,12 @@ def expand_smiles_to_qcschema(
             f = io.StringIO()
             with contextlib.redirect_stderr(f):
                 with contextlib.redirect_stdout(f):
-                    mol.generate_conformers(n_conformers=n_confs)
+                    try:
+                        mol.generate_conformers(n_conformers=n_confs)
+                    except TypeError:
+                        pass
+
+            rdmol = mol.to_rdkit()
 
             L = len(mol.conformers)
             # This will be used to determined whether it should be pruned
@@ -204,9 +240,10 @@ def expand_smiles_to_qcschema(
                     # upper triangle of the comparisons (j < k)
                     for k in range(j + 1, L):
 
+                        rmsd_i = AlignMol(rdmol, rdmol, k, j)
                         r = np.linalg.norm(
-                                mol.conformers[k] - mol.conformers[j], axis=1
-                                )
+                            mol.conformers[k] - mol.conformers[j], axis=1
+                        )
                         rmsd_i = r.mean()
 
                         # Flag this conformer for pruning, and also
@@ -218,11 +255,12 @@ def expand_smiles_to_qcschema(
                 # hack? how to set conformers explicity if different number than
                 # currently stored?
                 confs = [
-                        mol.conformers[j] for j, add_bool in enumerate(uniq) if add_bool
-                        ]
+                    mol.conformers[j] for j, add_bool in enumerate(uniq) if add_bool
+                ]
                 mol._conformers = confs.copy()
 
-
+    if len(molecule_set) == 0:
+       molecule_set[ref_smi] = []
 
     return molecule_set
 
@@ -232,103 +270,103 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-            description="A tool to transform a SMILES string into a QCSchema.  Enumerates stereoisomers if the SMILES is ambiguous, and generates conformers."
-            )
+        description="A tool to transform a SMILES string into a QCSchema.  Enumerates stereoisomers if the SMILES is ambiguous, and generates conformers."
+    )
     parser.add_argument(
-            "input",
-            type=str,
-            help="Input file containing smiles strings. Assumes that the file is CSV-like, splits on spaces, and the SMILES is the first column",
-            )
+        "input",
+        type=str,
+        help="Input file containing smiles strings. Assumes that the file is CSV-like, splits on spaces, and the SMILES is the first column",
+    )
 
     parser.add_argument(
-            "-c",
-            "--cutoff",
-            type=float,
-            help="Prune conformers less than this cutoff using all pairwise RMSD comparisons (in Angstroms)",
-            )
+        "-c",
+        "--cutoff",
+        type=float,
+        help="Prune conformers less than this cutoff using all pairwise RMSD comparisons (in Angstroms)",
+    )
 
     parser.add_argument(
-            "-n",
-            "--max-conformers",
-            type=int,
-            help="The number of conformations to attempt generating",
-            )
+        "-n",
+        "--max-conformers",
+        type=int,
+        help="The number of conformations to attempt generating",
+    )
 
     parser.add_argument(
-            "-s",
-            "--line-start",
-            type=int,
-            default=0,
-            help="The line in the input file to start processing",
-            )
+        "-s",
+        "--line-start",
+        type=int,
+        default=0,
+        help="The line in the input file to start processing",
+    )
 
     parser.add_argument(
-            "-e",
-            "--line-end",
-            type=int,
-            help="The line in the input file to stop processing (not inclusive)",
-            )
+        "-e",
+        "--line-end",
+        type=int,
+        help="The line in the input file to stop processing (not inclusive)",
+    )
 
     parser.add_argument(
-            "-H",
-            "--header-lines",
-            type=int,
-            help=""" The number of lines at the top of the file to skip before data
+        "-H",
+        "--header-lines",
+        type=int,
+        help=""" The number of lines at the top of the file to skip before data
         begins""",
         default=0,
-        )
+    )
 
     parser.add_argument(
-            "-u",
-            "--unique-smiles",
-            action="store_true",
-            help="""If stereoisomers are generated, organize molecules by their
+        "-u",
+        "--unique-smiles",
+        action="store_true",
+        help="""If stereoisomers are generated, organize molecules by their
         unambiguous SMILES string""",
-        )
+    )
 
     parser.add_argument(
-            "-i",
-            "--isomers",
-            type=int,
-            default=-1,
-            help="""The number of stereoisomers to keep if multiple are found""",
-            )
+        "-i",
+        "--isomers",
+        type=int,
+        default=-1,
+        help="""The number of stereoisomers to keep if multiple are found""",
+    )
 
     parser.add_argument(
-            "-o", "--output-file", type=str, help="The file to write the output log to"
-            )
+        "-o", "--output-file", type=str, help="The file to write the output log to"
+    )
 
     parser.add_argument(
-            "-f",
-            "--formatted-out",
-            type=str,
-            help="Write all molecules to a formatted output as qc_schema molecules.  Assumes singlets! Choose either --json, --qcsubmit, or --msgpack as the  the format",
-            )
+        "-f",
+        "--formatted-out",
+        type=str,
+        help="Write all molecules to a formatted output as qc_schema molecules.  Assumes singlets! Choose either --json, --qcsubmit, or --msgpack as the  the format",
+    )
 
     parser.add_argument(
-            "-j",
-            "--json",
-            action="store_true",
-            help="Write the formatted output to qc_schema (json) format.",
-            )
+        "-j",
+        "--json",
+        action="store_true",
+        help="Write the formatted output to qc_schema (json) format.",
+    )
     parser.add_argument(
-            "--qcsubmit",
-            action="store_true",
-            help="Create and ",
-            )
+        "--qcsubmit",
+        action="store_true",
+        help="Create and ",
+    )
 
     parser.add_argument(
-            "-m",
-            "--msgpack",
-            action="store_true",
-            help="Write the formatted output to qc_schema binary message pack (msgpack).",
-            )
+        "-m",
+        "--msgpack",
+        action="store_true",
+        help="Write the formatted output to qc_schema binary message pack (msgpack).",
+    )
 
     parser.add_argument(
-            "--ncpus",
-            type=int,
-            help="Number of processes to use.",
-            )
+        "--ncpus",
+        type=int,
+        help="Number of processes to use.",
+    )
 
     args = parser.parse_args()
 
@@ -352,8 +390,8 @@ def main():
     output += out_line
 
     out_line = "# Generating max {:d} conformers, prune RMSD {:6.2f}\n".format(
-            args.max_conformers, args.cutoff
-            )
+        args.max_conformers, args.cutoff
+    )
     output += out_line
 
     if args.unique_smiles:
@@ -373,15 +411,21 @@ def main():
     #############################################################################
 
     kwargs = dict(
-            cutoff=args.cutoff,
-            n_confs=args.max_conformers,
-            unique_smiles=args.unique_smiles,
-            isomer_max=args.isomers)
+        cutoff=args.cutoff,
+        n_confs=args.max_conformers,
+        unique_smiles=args.unique_smiles,
+        isomer_max=args.isomers,
+    )
 
     mols = {}
     entries, isomers, conformations = 0, 0, 0
+
+    no_mol = []
+    no_conf = []
     if args.ncpus == 1:
-        for i in tqdm.tqdm(range(start, end), total=end-start, ncols=80):
+        for i in tqdm.tqdm(
+            range(start, end), total=end - start, ncols=80, disable=True
+        ):
             fn_args = (i, end, args.header_lines, args.input)
             mol, out_lines, counts = process_smiles_to_qcschema(*fn_args, **kwargs)
             mols.update(mol)
@@ -389,8 +433,18 @@ def main():
             entries += counts[0]
             isomers += counts[1]
             conformations += counts[2]
-            fid.write("{:22s}Inputs: {:10d} Isomers: {:10d} Conformations: {:10d}\n".format("", entries,isomers,conformations))
-            
+            if counts[1] == 0:
+                fid.write("{:22s}Error: Could not build molecule\n".format(""))
+                no_mol.extend(mol.keys())
+            elif counts[2] == 0:
+                fid.write("{:22s}Error: Could not generate any conformers\n".format(""))
+                no_conf.extend(mol.keys())
+            fid.write(
+                "{:22s}Inputs: {:10d} Isomers: {:10d} Conformations: {:10d}\n".format(
+                    "", entries, isomers, conformations
+                )
+            )
+
     else:
         pool = Pool(processes=args.ncpus)
 
@@ -401,14 +455,27 @@ def main():
             unit = pool.apply_async(process_smiles_to_qcschema, fn_args, kwargs)
             work.append(unit)
 
-        for i, unit in tqdm.tqdm(enumerate(work), total=len(work), ncols=80):
+        for i, unit in tqdm.tqdm(
+            enumerate(work), total=len(work), ncols=80, disable=True
+        ):
             mol, out_lines, counts = unit.get()
             mols.update(mol)
             fid.write(out_lines)
             entries += counts[0]
             isomers += counts[1]
             conformations += counts[2]
-            fid.write("{:22s}Inputs: {:10d} Isomers: {:10d} Conformations: {:10d}\n".format("", entries,isomers,conformations))
+            if counts[1] == 0:
+                fid.write("{:22s}Error: Could not build molecule\n".format(""))
+                no_mol.extend(mol.keys())
+            elif counts[2] == 0:
+                fid.write("{:22s}Error: Could not generate any conformers\n".format(""))
+                no_conf.extend(mol.keys())
+
+            fid.write(
+                "{:22s}Inputs: {:10d} Isomers: {:10d} Conformations: {:10d}\n".format(
+                    "", entries, isomers, conformations
+                )
+            )
 
         pool.close()
 
@@ -416,6 +483,17 @@ def main():
     fid.write("  Inputs:        {:8d}\n".format(entries))
     fid.write("  Isomers:       {:8d}\n".format(isomers))
     fid.write("  Conformations: {:8d}\n".format(conformations))
+
+    if len(no_mol) > 0:
+        fid.write("\nEntries that could not be built:\n")
+        for i, m in enumerate(no_mol, 1):
+            fid.write("  {:8d} {:s}\n".format(i, m))
+
+    if len(no_conf) > 0:
+        fid.write("\nEntries that could not generate conformers:\n")
+        for i, m in enumerate(no_conf, 1):
+            fid.write("  {:8d} {:s}\n".format(i, m))
+
 
     if args.output_file is not None and fid is not sys.stdout:
         fid.close()
@@ -442,7 +520,14 @@ def main():
                 with open(args.formatted_out, "wb") as fid:
                     msgpack.dump(json_mol, fid)
             elif args.json:
-                with open(args.formatted_out, "w") as fid:
+                opener = open
+                if args.formatted_out.endswith("bz2"):
+                    opener = bz2.open
+                elif args.formatted_out.endswith("xz"):
+                    opener = lzma.open
+                elif args.formatted_out.endswith("lzma"):
+                    opener = lzma.open
+                with opener(args.formatted_out, "wt") as fid:
                     json.dump(json_mol, fid, indent=2)
 
 

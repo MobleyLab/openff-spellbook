@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 
-from datetime import datetime
+import math
+from datetime import datetime, timedelta
 
 import numpy as np
+import tqdm
+
 import qcfractal.interface as ptl
 import treedi.node as Node
 import treedi.tree as Tree
@@ -89,14 +92,16 @@ class QCATree(Tree.Tree):
 
         Should do this in a more elegant way using e.g. dispatching
         """
-        from qcfractal.interface.collections.gridoptimization_dataset import \
-            GridOptimizationDataset
-        from qcfractal.interface.collections.optimization_dataset import \
-            OptimizationDataset
-        from qcfractal.interface.collections.torsiondrive_dataset import \
-            TorsionDriveDataset
-        from qcfractal.interface.models.gridoptimization import \
-            GridOptimizationRecord
+        from qcfractal.interface.collections.gridoptimization_dataset import (
+            GridOptimizationDataset,
+        )
+        from qcfractal.interface.collections.optimization_dataset import (
+            OptimizationDataset,
+        )
+        from qcfractal.interface.collections.torsiondrive_dataset import (
+            TorsionDriveDataset,
+        )
+        from qcfractal.interface.models.gridoptimization import GridOptimizationRecord
         from qcfractal.interface.models.records import OptimizationRecord
         from qcfractal.interface.models.torsiondrive import TorsionDriveRecord
 
@@ -264,6 +269,16 @@ class QCATree(Tree.Tree):
         fn = __class__.node_iter_torsiondriverecord_minimum
         return self.cache_minimum_molecules(tdr_nodes, fn)
 
+    def cache_torsiondriverecord_minimum_gradients(self, nodes=None):
+        if nodes is None:
+            tdr_nodes = self.iter_entry(select="TorsionDrive")
+        elif not hasattr(nodes, "__iter__"):
+            tdr_nodes = self.node_iter_depth_first([nodes], select="TorsionDrive")
+        else:
+            tdr_nodes = self.node_iter_depth_first(nodes, select="TorsionDrive")
+        fn = __class__.node_iter_torsiondriverecord_minimum
+        return self.cache_minimum_gradients(tdr_nodes, fn)
+
     def cache_final_molecules(self, nodes=None):
         """
         Visit the entries and download the initial molecules of each procedure
@@ -331,10 +346,12 @@ class QCATree(Tree.Tree):
             else:
                 self.db[key]["data"] = val
 
-    def cache_minimum_molecules(self, nodes, fn):
-
+    def _cache_minimum(self, nodes, stubname, fullname, query_fn, iter_fn=None):
         if not hasattr(nodes, "__iter__"):
             nodes = [nodes]
+
+        if iter_fn is None:
+            iter_fn = self.node_iter_depth_first
 
         # make a list since we iterate it twice. if its a generator the first
         # iteration would consume the generator
@@ -342,40 +359,52 @@ class QCATree(Tree.Tree):
         mols = {}
         for top_node in nodes:
             mols[top_node.index] = []
-            for node in fn(self, top_node, select="MoleculeStub"):
+            for node in iter_fn(self, top_node, select=stubname):
                 mols[top_node.index].append(node.payload)
             if mols[top_node.index] == []:
                 mols.pop(top_node.index)
         if len(mols) == 0:
-            print("No molecules found")
+            print("No", fullname, "found")
             return 0
 
-        mol_ids_flat = flatten_list([x for x in mols.values()], -1)
-        client = self.db["ROOT"]["data"]
+        ids_flat = flatten_list([x for x in mols.values()], -1)
 
-        print("Downloading", len(mol_ids_flat), "minimum molecules using", fn)
-        fresh_obj_map = self.batch_download(mol_ids_flat, client.query_molecules)
+        print("Downloading", len(ids_flat), "minimum", fullname, "using", iter_fn)
+        fresh_obj_map = self.batch_download(ids_flat, query_fn)
 
         for top_node in nodes:
 
-            found = 0
-            # candidates = sum(
-            #    [1 for _ in fn(self, top_node, select="MoleculeStub")])
-
-            for node in fn(self, top_node, select="MoleculeStub"):
+            for node in iter_fn(self, top_node, select=stubname):
                 mol = fresh_obj_map[node.payload]
                 assert mol is not None
 
                 self.db[node.payload] = DEFAULT_DB({"data": mol})
-                node.name = "Molecule"
+                node.name = fullname
                 node.stamp = datetime.now()
                 self.register_modified(node, state=Node.CLEAN)
-        return len(mol_ids_flat)
+        return len(ids_flat)
+
+    def cache_minimum_gradients(self, nodes, iter_fn=None):
+        client = self.db["ROOT"]["data"]
+        return self._cache_minimum(
+            nodes, "GradientStub", "Gradient", client.query_results, iter_fn
+        )
+
+        # self.cache_results(nodes, select="GradientStub")
+
+    def cache_minimum_molecules(self, nodes, iter_fn=None):
+        client = self.db["ROOT"]["data"]
+        return self._cache_minimum(
+            nodes, "MoleculeStub", "Molecule", client.query_molecules, iter_fn
+        )
+
+    def cache_gradients(self, nodes):
+        self._cache_results(nodes, select="GradientStub")
 
     def cache_hessians(self, nodes):
-        self.cache_results(nodes, select="HessianStub")
+        self._cache_results(nodes, select="HessianStub")
 
-    def cache_results(self, nodes, fn=Tree.Tree.node_iter_depth_first, select=None):
+    def _cache_results(self, nodes, fn=Tree.Tree.node_iter_depth_first, select=None):
         """
         Generate method to cache results depending on select.
         """
@@ -469,16 +498,16 @@ class QCATree(Tree.Tree):
             result.append(pool.apply_async(wrap_fn_hessian, args, kwargs))
 
         total_received = 0
-        for ret in result:
+        for ret in tqdm.tqdm(result, total=len(result), ncols=80, desc="Requests"):
             ret = ret.get()
             objs += ret[0]
-            print("\r" + ret[1], end="")
+            # print("\r" + ret[1], end="")
             total_received += ret[2]
 
         pool.close()
 
         print(
-            "\nTotalTime: {:s} Received: {:d}\n".format(
+            "TotalTime: {:s} Received: {:d}\n\n".format(
                 str(datetime.now() - total), total_received
             ),
             end="",
@@ -555,7 +584,7 @@ class QCATree(Tree.Tree):
                     end="",
                 )
 
-        print("\nTotalTime: {:s}\n".format(str(datetime.now() - total)), end="")
+        print("TotalTime: {:s}\n\n".format(str(datetime.now() - total)), end="")
 
         # Reapply the stripped identifier
         obj_map = {id_suf + str(obj["id"]): obj for obj in objs}
@@ -564,11 +593,9 @@ class QCATree(Tree.Tree):
     def batch_download_parallel(
         self, full_ids, fn, max_query=1000, procedure=None, projection=None
     ):
-        from multiprocessing import Pool, TimeoutError
         from multiprocessing.pool import ThreadPool
 
         pool = ThreadPool(10)
-        import math
 
         chunks = []
         L = len(full_ids)
@@ -587,7 +614,6 @@ class QCATree(Tree.Tree):
         out_str = "Chunk "
         if projection is not None:
             out_str += "with projection "
-        from datetime import datetime, timedelta
 
         total = datetime.now()
         ids = [x.split("-")[1] for x in full_ids]
@@ -612,10 +638,10 @@ class QCATree(Tree.Tree):
             result.append(pool.apply_async(wrap_fn, args, kwargs))
 
         total_received = 0
-        for ret in result:
+        for ret in tqdm.tqdm(result, total=len(result), ncols=80, desc="Requests"):
             ret = ret.get()
             objs += ret[0]
-            print("\r", ret[1], end="")
+            # print("\r", ret[1], end="")
             total_received += ret[2]
 
         pool.close()
@@ -630,7 +656,7 @@ class QCATree(Tree.Tree):
         obj_map = {id_suf + str(obj.get("id")): obj for obj in objs}
         # obj_map = {id_suf + obj.id: obj for obj in objs}
         print(
-            "\nTotalTime: {:s} Received: {:d}\n".format(
+            "TotalTime: {:s} Received: {:d}\n\n".format(
                 str(datetime.now() - total), total_received
             ),
             end="",
@@ -699,12 +725,12 @@ class QCATree(Tree.Tree):
 
             elapsed = str(datetime.now() - elapsed)
             # if i == 0:
-            if True:
+            if False:
                 print(
                     "... Received {:6d}  | elapsed: {:s}".format(len(objs), elapsed),
                     end="",
                 )
-        print("\nTotalTime: {:s}\n".format(str(datetime.now() - total)), end="")
+        print("TotalTime: {:s}\n\n".format(str(datetime.now() - total)), end="")
         obj_map = {id_suf + str(obj.get("id")): obj for obj in objs}
         # obj_map = {id_suf + obj.id: obj for obj in objs}
         # obj_map = {}
@@ -773,20 +799,22 @@ class QCATree(Tree.Tree):
 
         # add this entry node
         nodes = []
-        for rec in records:
+        for rec in tqdm.tqdm(records, total=len(records), ncols=80, desc="Entries"):
+
+            record = records[rec]
             # add ds.data.id to ensure that entries are unique across dict
             # TODO this should probably have server/db info as well
             # since two mirror servers could have same ids but different data
 
             pl_name = "QCE." + ds.data.id + "-" + str(rec)
             if pl_name in self.db:
-                if records[rec].name == self.db[pl_name]["data"].name:
+                if record.name == self.db[pl_name]["data"].name:
                     # Not sure why, but this Entry was already added.
                     # Just assume we can skip it.
                     continue
             node = Node.Node(name="Entry", payload=pl_name)
             node = self.add(ds_node.index, node)
-            self.db[pl_name] = DEFAULT_DB({"data": records[rec]})
+            self.db[pl_name] = DEFAULT_DB({"data": record})
             # add the specs for this entry
             if "Specification" in self.drop:
                 return
@@ -802,36 +830,35 @@ class QCATree(Tree.Tree):
 
                 # if the spec is not here, then somehow data was never
                 # generated. This is not a good thing.
-                if spec not in records[rec].object_map:
+                if spec not in record.object_map:
                     print("Spec", spec, "for entry", rec, "missing!")
                     continue
 
-                for proc in procedures:
-                    if proc != "QCP-" + records[rec].object_map[spec]:
-                        continue
-                    pl_name = proc
-                    pload = DEFAULT_DB({"data": obj_map[proc]})
-                    proc_node = Node.Node(name=name, payload=pl_name)
-                    proc_node = self.add(spec_node.index, proc_node)
-                    self.db[pl_name] = pload
+                proc = "QCP-" + record.object_map[spec]
+                # breakpoint()
+                pl_name = proc
+                pload = DEFAULT_DB({"data": obj_map[proc]})
+                proc_node = Node.Node(name=name, payload=pl_name)
+                proc_node = self.add(spec_node.index, proc_node)
+                self.db[pl_name] = pload
 
-                    # expand these nodes below
-                    nodes.append(proc_node)
+                # expand these nodes below
+                nodes.append(proc_node)
 
-                    # perhaps inefficient, but add init mols as we travel
-                    # the data, rather than all at once
-                    # should help with debugging
-                    molid = pload["data"]["initial_molecule"]
-                    # molid = pload["data"].initial_molecule
-                    if init_mols_are_lists:
-                        for molid_i in molid:
-                            molid_i = "QCM-" + molid_i
-                            mol_obj = init_mol_map[molid_i]
-                            self.db[molid_i] = DEFAULT_DB({"data": mol_obj})
-                    else:
-                        molid = "QCM-" + molid
-                        mol_obj = init_mol_map[molid]
-                        self.db[molid] = DEFAULT_DB({"data": mol_obj})
+                # perhaps inefficient, but add init mols as we travel
+                # the data, rather than all at once
+                # should help with debugging
+                molid = pload["data"]["initial_molecule"]
+                # molid = pload["data"].initial_molecule
+                if init_mols_are_lists:
+                    for molid_i in molid:
+                        molid_i = "QCM-" + molid_i
+                        mol_obj = init_mol_map[molid_i]
+                        self.db[molid_i] = DEFAULT_DB({"data": mol_obj})
+                else:
+                    molid = "QCM-" + molid
+                    mol_obj = init_mol_map[molid]
+                    self.db[molid] = DEFAULT_DB({"data": mol_obj})
 
         #        nodes = []
         #        spec_data = None
@@ -863,6 +890,8 @@ class QCATree(Tree.Tree):
         #                molid = 'QCM-' + str(qcid["data"]["initial_molecule"])
         #            mol_obj = init_mol_map[molid]
         #            self.db[molid] = { "data": mol_obj}
+
+        print()
 
         # descend into the next type of nodes
         fn([node.index for node in nodes], skel=skel)
@@ -917,7 +946,7 @@ class QCATree(Tree.Tree):
             return
         opt_nodes = []
 
-        for node in nodes:
+        for node in tqdm.tqdm(nodes, total=len(nodes), ncols=80, desc="GridOpt"):
 
             obj = self.db[node.payload]
             scans = obj["data"]["keywords"].scans
@@ -948,6 +977,7 @@ class QCATree(Tree.Tree):
                 opt_nodes.append(opt_node)
                 opt_node = self.add(constraint_node.index, opt_node)
                 self.db[index] = DEFAULT_DB({"data": opt_map[index]})
+        print()
 
         self.branch_optimization_record([x.index for x in opt_nodes], skel=skel)
 
@@ -994,7 +1024,7 @@ class QCATree(Tree.Tree):
 
         # have the opt map, which is the optimizations with their ids
         # nodes are the torsiondrives
-        for node in nodes:
+        for node in tqdm.tqdm(nodes, total=len(nodes), ncols=80, desc="TorsionDrives"):
             obj = self.db[node.payload]
             entry = next(self.node_iter_to_root_single(node, select="Entry"))
             entry = self.db[entry.payload]["data"]
@@ -1012,6 +1042,7 @@ class QCATree(Tree.Tree):
                     opt_nodes.append(opt_node)
                     opt_node = self.add(constraint_node.index, opt_node)
                     self.db[index] = DEFAULT_DB({"data": opt_map[index]})
+        print()
 
         self.branch_optimization_record([x.index for x in opt_nodes], skel=skel)
 
@@ -1052,7 +1083,8 @@ class QCATree(Tree.Tree):
                     )
             else:
                 result_ids = [
-                    self.db[node.payload]["data"]["trajectory"] for node in nodes
+                    self.db[node.payload]["data"]["trajectory"]
+                    for node in nodes
                     # self.db[node.payload]["data"].trajectory for node in nodes
                 ]
         except AttributeError:
@@ -1081,7 +1113,7 @@ class QCATree(Tree.Tree):
         incompletes = 0
         completes = 0
         errors = 0
-        for node in nodes:
+        for node in tqdm.tqdm(nodes, total=len(nodes), ncols=80, desc="Optimizations"):
             obj = self.db[node.payload]
             traj = obj["data"]["trajectory"]
             # traj = obj["data"].trajectory
@@ -1092,11 +1124,11 @@ class QCATree(Tree.Tree):
                 completes += 1
             elif status == "INCOMPLETE":
                 incompletes += 1
-                print("QCA: This optimization incomplete (" + node.payload + ")")
+                # print("QCA: This optimization incomplete (" + node.payload + ")")
                 continue
             else:
                 errors += 1
-                print("QCA: This optimization failed (" + node.payload + ")")
+                # print("QCA: This optimization failed (" + node.payload + ")")
                 continue
             if traj is not None and len(traj) > 0:
                 if "Intermediates" in self.drop:
@@ -1122,6 +1154,8 @@ class QCATree(Tree.Tree):
         data = [incompletes, len(nodes), incompletes / len(nodes) * 100.0]
         print("Incompletes: {:8d}/{:8d} ({:6.2f}%)".format(*data))
 
+        print()
+
         self.branch_result_record([x.index for x in result_nodes], skel=skel)
 
     def branch_result_record(self, nids, skel=False):
@@ -1140,10 +1174,14 @@ class QCATree(Tree.Tree):
         mol_nodes = []
         gradstubs = [
             # node for node in nodes if not hasattr(self.db[node.payload]["data"], "molecule")
-            node for node in nodes if ("molecule" not in self.db[node.payload]["data"])
+            node
+            for node in nodes
+            if ("molecule" not in self.db[node.payload]["data"])
         ]
         fullgrads = [
-            node for node in nodes if ("molecule" in self.db[node.payload]["data"])
+            node
+            for node in nodes
+            if ("molecule" in self.db[node.payload]["data"])
             # node for node in nodes if hasattr(self.db[node.payload]["data"], "molecule")
         ]
 
@@ -1182,7 +1220,7 @@ class QCATree(Tree.Tree):
                 client.query_molecules,
             )
 
-        for node in nodes:
+        for node in tqdm.tqdm(nodes, total=len(nodes), ncols=80, desc="Gradients"):
             if node.payload is None:
                 print(node)
                 assert False
@@ -1226,7 +1264,9 @@ class QCATree(Tree.Tree):
         )
 
         if len(hess_objs) > 0:
-            for mol in mol_nodes:
+            for mol in tqdm.tqdm(
+                mol_nodes, total=len(mol_nodes), ncols=80, desc="Hessians"
+            ):
                 payload = mol.payload
                 for hess in hess_objs:
                     pl = hess_objs[hess]
@@ -1330,9 +1370,112 @@ class QCATree(Tree.Tree):
                 if point not in minimum_positions:
                     continue
                 min_opt_id = minimum_positions[point]
-                min_ene_id = "QCP-" + opt_hist[point][min_opt_id]
+                try:
+                    min_ene_id = "QCP-" + opt_hist[point][min_opt_id]
+                except IndexError:
+                    print("ERROR: TD malformed!")
+                    print("Tried to access point", point, " and opt ID ", min_opt_id)
+                    print("Offending TD is", tdr_node)
+                    print("from dataset", list(self.node_iter_to_root(tdr_node)))
+                    continue
                 for opt_nid in constraint_node.children:
                     opt_node = self[opt_nid]
                     if min_ene_id == opt_node.payload:
                         yield from fn(self, self[opt_node.children[-1]], select)
                         break
+
+    def _yield_match_td_smarts(self, targets, smitree, indices):
+
+        import offsb.rdutil
+
+        count = 0
+
+        # Since we may hit the torsion drive multiple times per molecule
+        # depending on wildcards and if we are only searching the rotatable
+        # bond, keep track to ensure the entries returned are unique
+        hit = set()
+        for node in self.node_iter_depth_first(targets, select="Entry"):
+
+            # assume 1D TD
+            if node.payload not in smitree.db:
+                continue
+
+            ciehms = self.db[node.payload]["data"].attributes[
+                "canonical_isomeric_explicit_hydrogen_mapped_smiles"
+            ]
+            rdmol = offsb.rdutil.mol.build_from_smiles(ciehms)
+            map_inv = {v - 1: k for k, v in offsb.rdutil.mol.atom_map(rdmol).items()}
+
+            # these are the indices of everything that matched in the smiles op
+            group_smi_list = list(
+                set(
+                    flatten_list(
+                        [
+                            tuples
+                            for tuples in smitree.db[node.payload]["data"].values()
+                        ],
+                        times=1,
+                    )
+                )
+            )
+            if group_smi_list == []:
+                continue
+
+            count += 1
+            dihedral = self.db[node.payload]["data"].td_keywords.dihedrals[0]
+            if len(indices) == 2:
+                dihedral = tuple(dihedral[1:3])
+
+            try:
+                dihedral = tuple([map_inv[i] for i in dihedral])
+            except KeyError:
+                print(
+                    "ERROR: The dihedral indices do not exist for this molecule.\n"
+                    + "The dihedral key is {}\n".format(dihedral)
+                    + "The mapped smiles is {}\n".format(ciehms)
+                    + "The entry is {}\n".format(node)
+                    + "From dataset {}\n".format(self[node.parent])
+                )
+                continue
+
+            if dihedral[-1] < dihedral[0]:
+                dihedral = dihedral[::-1]
+
+            for smi_group in group_smi_list:
+
+                smi = tuple([smi_group[i] for i in indices])
+                if smi[-1] < smi[0]:
+                    smi = smi[::-1]
+                smi = tuple(smi)
+
+                if smi == dihedral and node.index not in hit:
+                    hit.add(node.index)
+                    yield node
+
+    def node_iter_torsiondrive_molecule_by_smarts(
+        self, entries=None, smarts="[*]~[*]~[*]~[*]", exact=False
+    ):
+        import offsb.search.smiles
+
+        if entries is None:
+            entries = [
+                n for n in self.node_iter_breadth_first(self.root(), select="Entry")
+            ]
+        else:
+            if not hasattr(entries, "__iter__"):
+                entries = [entries]
+            else:
+                entries = [
+                    n for n in self.node_iter_breadth_first(entries, select="Entry")
+                ]
+
+        smarts_query = offsb.search.smiles.SmilesSearchTree(
+            smarts, self, name="smarts_query", verbose=False
+        )
+        smarts_query.apply(targets=entries)
+
+        indices = [0, 1, 2, 3]
+        if not exact:
+            indices = [1, 2]
+
+        yield from self._yield_match_td_smarts(entries, smarts_query, indices)
