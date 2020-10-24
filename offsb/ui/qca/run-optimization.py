@@ -243,6 +243,7 @@ def main():
 
     js = qca_configure_runtime(js, args.memory, args.nthreads, args.maxiter)
 
+    ret = ""
     if args.inputs_only:
         ret = js
     else:
