@@ -86,7 +86,7 @@ def qca_run_geometric_opt_native(in_json_dict, file_prefix):
         logging.basicConfig(format=FORMAT)
         # All logging lines in geometric add their own newlines
         logger.handlers[0].terminator = ""
-        logging.warn("Output file not given. Optimization trajectory will not be saved\n")
+        logging.warning("Output file not given. Optimization trajectory will not be saved\n")
 
     M, engine = geometric.optimize.get_molecule_engine(**input_opts)
 
