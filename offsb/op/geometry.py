@@ -67,7 +67,7 @@ class GeometryOperation(offsb.treedi.tree.TreeOperation, ABC):
         ):
             raise IndexError("Partial map index read; refuse to proceed")
 
-        mol = self.source.source.db[target.payload]["data"]["geometry"]
+        mol = self.source.source.db[target.payload]["data"].geometry
 
         obj = self.source.db[entry_node.payload]
         masks = flatten_list([x for x in obj["data"].values()], times=1)
@@ -112,7 +112,9 @@ class GeometryOperation(offsb.treedi.tree.TreeOperation, ABC):
                 vals = op(mol, mask_mapped)
                 calcs += 1
             except Exception as e:
-                out_str += "Calculation failed for" + str(target) + "\n"
+                import traceback
+                out_str += "Calculation failed for " + str(target) + "\n"
+                out_str += traceback.format_exc() + "\n"
                 out_str += "Error:\n" + str(e) + "\n"
 
             ret[tuple(mask)] = vals
@@ -140,7 +142,8 @@ class AngleOperation(GeometryOperation):
         )
         atoms_trans = atoms - atoms[:, idx[1], :][:, np.newaxis, :]
         unit = atoms_trans[:, [idx[0], idx[2]], :] / mags[:, :, np.newaxis]
-        costheta = (unit[:, 0, :] * unit[:, 1, :]).sum(axis=1) np.clip(costheta, -1.0, 1.0, out=costheta)
+        costheta = (unit[:, 0, :] * unit[:, 1, :]).sum(axis=1)
+        np.clip(costheta, -1.0, 1.0, out=costheta)
         ret = np.arccos(costheta) * 180 / np.pi
         return ret
 
@@ -309,7 +312,7 @@ class ImproperTorsionOperation(GeometryOperation):
     def measure(mol, idx):
         """calculates improper torsion of [i, center, j, k]"""
         atoms = mol[np.newaxis, :, :]
-        noncenter = [idx[0]] + idx[2:4]
+        noncenter = [idx[0]] + list(idx[2:4])
         mags = np.linalg.norm(
             atoms[:, noncenter, :] - atoms[:, idx[1], :][:, np.newaxis, :], axis=2
         )

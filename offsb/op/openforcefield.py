@@ -14,7 +14,8 @@ from pkg_resources import iter_entry_points
 import offsb.rdutil.mol
 import offsb.treedi
 import offsb.treedi.tree
-import openforcefield as oFF
+import openforcefield.typing.engines.smirnoff as OFF
+from openforcefield.topology import Molecule
 from offsb.search.smiles import SmilesSearchTree
 from offsb.tools.util import flatten_list
 from offsb.treedi.tree import DEFAULT_DB, PartitionTree
@@ -50,15 +51,15 @@ class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
                 else:
                     pth = entry_point.load()()[0]
                 abspth = os.path.join(pth, filename)
-                print("Searching", abspth)
+                self.logger.info("Searching + {}".format(abspth))
                 if os.path.exists(abspth):
                     self.abs_path = abspth
-                    print("Found")
+                    self.logger.info("Found {}".format(abspth))
                     found = True
                     break
             if not found:
                 raise Exception("Forcefield could not be found")
-            self.forcefield = oFF.typing.engines.smirnoff.ForceField(
+            self.forcefield = OFF.ForceField(
                 self.abs_path, disable_version_check=True
             )
             logger.setLevel(level=level)
@@ -70,7 +71,6 @@ class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
         return obj
 
     def to_pickle_str(self):
-        import pickle
 
         tmp = self.forcefield
         self.forcefield = None
@@ -85,7 +85,7 @@ class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
     def associate(self, source):
         super().associate(source)
         if self.forcefield is None:
-            self.forcefield = oFF.typing.engines.smirnoff.ForceField(
+            self.forcefield = OFF.ForceField(
                 self.abs_path, disable_version_check=True
             )
 
@@ -189,7 +189,7 @@ class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
                     with contextlib.redirect_stderr(f):
                         # mmol = oFF.topology.Molecule.from_rdkit(mol,
                         #         allow_undefined_stereo=True)
-                        mmol = oFF.topology.Molecule.from_smiles(
+                        mmol = Molecule.from_smiles(
                             smi, allow_undefined_stereo=True
                         )
                     for line in f:
@@ -385,7 +385,9 @@ class OpenForceFieldTree(OpenForceFieldTreeBase):
         source = self.source
         self.source = _DummyTree
         self.source.source = source
-        self.processes = None
+
+        # multiple processes is buggy, and worse, slower
+        self.processes = 1
 
     def op(self, node, partition):
         pass
@@ -433,8 +435,6 @@ class OpenForceFieldTree(OpenForceFieldTreeBase):
         self.logger.debug("Pulled entry {}".format(target))
         self.logger.debug("Pulled entry data {}".format(entry))
 
-        out_str = ""
-
         # we skip using 3D since labeling does not depend on coordinates
         smi = kwargs.get("smi")
 
@@ -468,12 +468,12 @@ class OpenForceFieldTree(OpenForceFieldTreeBase):
 
         smi = kwargs["smi"]
 
-        mmol = oFF.topology.Molecule.from_smiles(smi, allow_undefined_stereo=True)
+        mmol = Molecule.from_smiles(smi, allow_undefined_stereo=True)
 
         # just skip molecules that oFF can't handle for whatever reason
 
         try:
-            top = oFF.topology.Topology.from_molecules(mmol)
+            top = mmol.to_topology()
         except AssertionError as e:
             out_str = ""
             out_str += "FAILED TO BUILD OFF MOL:\n"

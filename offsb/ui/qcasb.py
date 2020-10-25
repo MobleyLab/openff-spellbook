@@ -58,8 +58,8 @@ class QCArchiveSpellBook:
             )
         newdata = False
 
-        print("Aux sets to load:")
-        print(sets)
+        # print("Aux sets to load:")
+        # print(sets)
 
         # take any dataset with OpenFF in the dataset name
         if load_all:
@@ -76,7 +76,7 @@ class QCArchiveSpellBook:
             name = s[1].split("/")
             specs = ["default"] if len(name) == 1 else name[1].split()
             specs = [x.strip() for x in specs]
-            print("Input has specs", specs)
+            # print("Input has specs", specs)
             name = name[0].rstrip().lstrip()
             if not any([name == self.QCA[i].name for i in self.QCA.root().children]):
                 print("Dataset", s, "not in local db, fetching...")
@@ -914,6 +914,10 @@ class QCArchiveSpellBook:
 
         warned = False
         warned_once = False
+
+        if out_fname is None:
+            out_fname = ffname
+
         for pi, param in enumerate(param_list):
 
             filename = ".".join([out_fname, param, "csv"])
@@ -930,6 +934,13 @@ class QCArchiveSpellBook:
                 value = param_metadata[pkey]
                 if type(value) == simtk.unit.Quantity:
                     value = str(value / value.unit) + " * " + str(value.unit)
+                if hasattr(value, "__iter__") and type(value) is not str:
+                    str_value = []
+                    for v in value:
+                        if type(v) == simtk.unit.Quantity:
+                            v = str(v / v.unit) + " * " + str(v.unit)
+                        str_value.append(v)
+                    value = str_value
                 param_metadata[pkey] = value
             f.write("#JSON param {}\n".format(json.dumps(param_metadata)))
 
@@ -997,7 +1008,13 @@ class QCArchiveSpellBook:
                         else:
                             atom_key_id = atom_key
 
-                        val = op_vals[atom_key][0] * convert
+                        val = op_vals[atom_key] 
+                        try:
+                            val = val[0]
+                        except IndexError:
+                            pass
+                        val = val * convert
+
                         all_vals.setdefault(atom_key_id, []).append(val)
                         rec = [
                             int(td_node.payload.split("-")[1]),

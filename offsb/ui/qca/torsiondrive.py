@@ -44,10 +44,14 @@ if __name__ == "__main__":
         ene = args.mm_energy
         out = args.out_file_name
 
+        if out is None:
+            out = name
+
         obj.torsiondrive_groupby_openff_param(name, param, energy=ene,
                 out_fname=out)
         if out is not None:
             obj.plot_torsiondrive_groupby_openff_param(out, oldparamfile=args.openff_previous)
     else:
-        raise Exception("Not implemented yet")
-        obj.torsiondrive_print(energy=args.qm_energy, out=args.out_file_name)
+        print("Not implemented yet. Specify --openff-name and --openff-parameter")
+        exit()
+        # obj.torsiondrive_print(energy=args.qm_energy, out=args.out_file_name)

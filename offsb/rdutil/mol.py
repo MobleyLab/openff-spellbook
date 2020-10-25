@@ -37,7 +37,7 @@ def embed_qcmol_3d(mol, qcmol):
 
     map_idx = atom_map(mol)
     assert map_idx is not None
-    xyz = qcmol.get("geometry") * const.bohr2angstrom
+    xyz = qcmol.geometry * const.bohr2angstrom
     coordMap = {i: RDGeom.Point3D(*xyz[map_idx[i] - 1]) for i in map_idx}
 
     n = mol.GetNumAtoms()

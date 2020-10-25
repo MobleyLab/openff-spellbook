@@ -258,8 +258,10 @@ class QCATree(Tree.Tree):
             )
         return tdr_nodes
 
-    def iter_entry(self, select=None):
-        yield from self.node_iter_entry(self.root(), select=select)
+    def iter_entry(self, select=None, dereference=None):
+        yield from self.node_iter_entry(
+            self.root(), select=select, dereference=dereference
+        )
 
     def cache_torsiondriverecord_minimum_molecules(self, nodes=None):
 
@@ -1271,12 +1273,14 @@ class QCATree(Tree.Tree):
         return ret
 
     def node_iter_optimization_minimum(
-        self, nodes, select=None, fn=Tree.Tree.node_iter_depth_first
+        self, nodes, select=None, fn=Tree.Tree.node_iter_depth_first, dereference=None
     ):
         if not hasattr(nodes, "__iter__"):
             nodes = [nodes]
         for top_node in nodes:
-            for opt_node in fn(self, top_node, select="Optimization"):
+            for opt_node in fn(
+                self, top_node, select="Optimization", dereference=dereference
+            ):
                 if len(opt_node.children) > 0:
                     # bit ugly, but it is taking the last gradient record, and
                     # the first (and only) molecule from it
@@ -1303,13 +1307,18 @@ class QCATree(Tree.Tree):
     #     return hits
 
     def node_iter_torsiondriverecord_minimum(
-        self, tdr_nodes=None, select=None, sort=True, fn=Tree.Tree.node_iter_depth_first
+        self,
+        tdr_nodes=None,
+        select=None,
+        sort=True,
+        fn=Tree.Tree.node_iter_depth_first,
+        dereference=None,
     ):
         if tdr_nodes is None:
             tdr_nodes = [
                 n
                 for n in self.node_iter_breadth_first(
-                    self.root(), select="TorsionDrive"
+                    self.root(), select="TorsionDrive", dereference=False
                 )
             ]
         if not hasattr(tdr_nodes, "__iter__"):
