@@ -191,7 +191,7 @@ class Tree(ABC):
 
     def set_root(self, root):
         self.node_index = {
-            node.index: node for node in self.node_iter_depth_first(root)
+            node.index: node for node in self.node_iter_depth_first(root, dereference=False)
         }
         # self.n_levels = max( [node_level( node) for node in self.node_index.values()])
         # self.n_nodes = node_descendents( root) + 1
@@ -284,86 +284,82 @@ class Tree(ABC):
         if isinstance(self.root, str):
             self.root = self[self.root]
 
-    def _yield(self, v):
-        if self.dereference:
-            # TODO Make sure all nodes store something in the db
+    def _yield(self, v, dereference=None):
+        dereference = self.dereference if dereference is None else dereference
+        if dereference:
             ret = self.db.get(v.payload, {}).get('data')
             if ret:
-                # TODO Save the proper info the build the data
-                # obj_type = self.db.get(v.payload, {}).get('type')
-                # if type(ret) == dict and obj_type:
-                #     ret = obj_type.ret)
                 yield ret
         else:
             yield v
 
-    def yield_if_single(self, v, select, state):
+    def yield_if_single(self, v, select, state, dereference=None):
         if select is None or select == v.name:
             if state is None or state == v.state:
-                yield from self._yield(v)
+                yield from self._yield(v, dereference=dereference)
 
-    def yield_if(self, v, select, state):
+    def yield_if(self, v, select, state, dereference=None):
         if hasattr(v, "__iter__"):
             for vi in v:
-                yield from self.yield_if(vi, select, state)
+                yield from self.yield_if(vi, select, state, dereference=dereference)
         else:
-            yield from self.yield_if_single(v, select, state)
+            yield from self.yield_if_single(v, select, state, dereference=dereference)
 
-    def node_iter_depth_first_single(self, v, select=None, state=None):
+    def node_iter_depth_first_single(self, v, select=None, state=None, dereference=None):
         for c in v.children:
             c = self[c]
-            yield from self.node_iter_depth_first_single(c, select, state)
-        yield from self.yield_if(v, select, state)
+            yield from self.node_iter_depth_first_single(c, select, state, dereference=dereference)
+        yield from self.yield_if(v, select, state, dereference=dereference)
 
-    def node_iter_depth_first(self, v, select=None, state=None):
+    def node_iter_depth_first(self, v, select=None, state=None, dereference=None):
         if hasattr(v, "__iter__"):
             for vi in v:
-                yield from self.node_iter_depth_first(vi, select, state)
+                yield from self.node_iter_depth_first(vi, select, state, dereference=dereference)
         else:
-            yield from self.node_iter_depth_first_single(v, select, state)
+            yield from self.node_iter_depth_first_single(v, select, state, dereference=dereference)
 
-    def node_iter_breadth_first_single(self, v, select=None, state=None):
+    def node_iter_breadth_first_single(self, v, select=None, state=None, dereference=None):
         if v.parent is None:
-            self._yield(v)
+            self._yield(v, dereference=dereference)
         for c in v.children:
             c = self[c]
-            yield from self.yield_if(c, select, state)
+            yield from self.yield_if(c, select, state, dereference)
         for c in v.children:
             c = self[c]
-            yield from self.node_iter_breadth_first_single(c, select, state)
+            yield from self.node_iter_breadth_first_single(c, select, state, dereference=dereference)
 
-    def node_iter_breadth_first(self, v, select=None, state=None):
+    def node_iter_breadth_first(self, v, select=None, state=None, dereference=None):
         if hasattr(v, "__iter__"):
             for vi in v:
-                yield from self.node_iter_breadth_first(vi, select, state)
+                yield from self.node_iter_breadth_first(vi, select, state, dereference=dereference)
         else:
-            yield from self.node_iter_breadth_first_single(v, select, state)
+            yield from self.node_iter_breadth_first_single(v, select, state, dereference=dereference)
 
-    def node_iter_dive_single(self, v, select=None, state=None):
-        yield from self.yield_if_single(v, select, state)
+    def node_iter_dive_single(self, v, select=None, state=None, dereference=None):
+        yield from self.yield_if_single(v, select, state, dereference=dereference)
         for c in v.children:
             c = self[c]
-            yield from self.node_iter_dive_single(c, select, state)
+            yield from self.node_iter_dive_single(c, select, state, dereference=dereference)
 
-    def node_iter_dive(self, v, select=None, state=None):
+    def node_iter_dive(self, v, select=None, state=None, dereference=None):
         if hasattr(v, "__iter__"):
             for vi in v:
-                yield from self.node_iter_dive(vi, select, state)
+                yield from self.node_iter_dive(vi, select, state, dereference=dereference)
         else:
-            yield from self.node_iter_dive_single(v, select, state)
+            yield from self.node_iter_dive_single(v, select, state, dereference=dereference)
 
-    def node_iter_to_root_single(self, v, select=None, state=None):
-        yield from self.yield_if_single(v, select, state)
+    def node_iter_to_root_single(self, v, select=None, state=None, dereference=None):
+        yield from self.yield_if_single(v, select, state, dereference=dereference)
         if v.parent is not None:
             parent = self[v.parent]
-            yield from self.node_iter_to_root_single(parent, select, state)
+            yield from self.node_iter_to_root_single(parent, select, state, dereference=dereference)
 
-    def node_iter_to_root(self, v, select=None, state=None):
+    def node_iter_to_root(self, v, select=None, state=None, dereference=None):
         if hasattr(v, "__iter__"):
             for vi in v:
-                yield from self.node_iter_to_root(vi, select, state)
+                yield from self.node_iter_to_root(vi, select, state, dereference=dereference)
         else:
-            yield from self.node_iter_to_root_single(v, select, state)
+            yield from self.node_iter_to_root_single(v, select, state, dereference=dereference)
 
     def get_root(self, node):
         if node.parent is None:
@@ -504,7 +500,7 @@ class TreeOperation(PartitionTree):
         if targets is None:
             root = self.source.source.root()
             targets = list(
-                self.source.source.node_iter_depth_first(root, select=select)
+                self.source.source.node_iter_depth_first(root, select=select, dereference=False)
             )
         elif not hasattr(targets, "__iter__"):
             targets = [targets]
@@ -512,7 +508,7 @@ class TreeOperation(PartitionTree):
         # since we can only operate on self._select, force it
         targets = flatten_list(
             [
-                self.source.source.node_iter_depth_first(x, select=select)
+                self.source.source.node_iter_depth_first(x, select=select, dereference=False)
                 for x in targets
             ]
         )

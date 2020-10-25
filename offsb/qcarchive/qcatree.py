@@ -23,20 +23,20 @@ def wrap_fn(fn, ids, i, j, **kwargs):
     A wrapper for the QCA batch downloader
     """
 
-    out_str = kwargs["out_str"]
-    kwargs.pop("out_str")
-    prestr = "\r{:20s} {:4d} {:4d}     ".format(out_str, i, j)
+    # out_str = kwargs["out_str"]
+    # kwargs.pop("out_str")
+    # prestr = "\r{:20s} {:4d} {:4d}     ".format(out_str, i, j)
 
-    elapsed = datetime.now()
-    objs = [dict(obj) for obj in fn(ids, **kwargs)]
+    # elapsed = datetime.now()
+    objs = [obj for obj in fn(ids, **kwargs)]
     # objs = [obj for obj in fn(ids, **kwargs)]
-    elapsed = str(datetime.now() - elapsed)
+    # elapsed = str(datetime.now() - elapsed)
 
-    N = len(objs)
-    poststr = "... Received {:6d}  | elapsed: {:s}".format(N, elapsed)
+    # N = len(objs)
+    # poststr = "... Received {:6d}  | elapsed: {:s}".format(N, elapsed)
 
-    out_str = prestr + poststr
-    return objs, out_str, N
+    # out_str = prestr + poststr
+    return objs
 
 
 def wrap_fn_hessian(fn, i, j, **kwargs):
@@ -44,20 +44,21 @@ def wrap_fn_hessian(fn, i, j, **kwargs):
     A wrapper for the QCA batch downloader for Hessians
     """
 
-    out_str = kwargs["out_str"]
-    kwargs.pop("out_str")
-    prestr = "\r{:20s} {:4d} {:4d}     ".format(out_str, i, j)
+    # out_str = kwargs["out_str"]
+    # kwargs.pop("out_str")
+    # prestr = "\r{:20s} {:4d} {:4d}     ".format(out_str, i, j)
 
-    elapsed = datetime.now()
-    objs = [dict(obj) for obj in fn(**kwargs)]
+    # elapsed = datetime.now()
+    objs = [obj for obj in fn(**kwargs)]
     # objs = [obj for obj in fn(**kwargs)]
-    elapsed = str(datetime.now() - elapsed)
+    # elapsed = str(datetime.now() - elapsed)
 
-    N = len(objs)
-    poststr = "... Received {:6d}  | elapsed: {:s}".format(N, elapsed)
+    # N = len(objs)
+    # poststr = "... Received {:6d}  | elapsed: {:s}".format(N, elapsed)
 
-    out_str = prestr + poststr
-    return objs, out_str, N
+    # out_str = prestr + poststr
+    return objs
+    # return objs, out_str, N
 
 
 class QCATree(Tree.Tree):
@@ -143,7 +144,7 @@ class QCATree(Tree.Tree):
         new_nodes = []
 
         if targets is None:
-            entries = list(self.node_iter_depth_first(self.root(), select="Entry"))
+            entries = list(self.node_iter_depth_first(self.root(), select="Entry", dereference=False))
         elif hasattr(targets, "__iter__"):
             entries = list(targets)
         else:
@@ -172,24 +173,11 @@ class QCATree(Tree.Tree):
 
         return new_nodes
 
-    def isolate(self):
-        for link in self.link:
-            self.link.__setitem(link, self.link.ID)
-
-    def associate(self, link_trees):
-        for link in link_trees:
-            self.link[link.ID] = link
-
-    def _obj_is_qca_collection(self, obj):
-        """ TODO """
-        return True
-
     def build_index(self, ds, drop=None, **kwargs):
         """
         Take a QCA DS, and create a node for it.
         Then expand it out.
         """
-        assert self._obj_is_qca_collection(ds)
 
         ds_id = "QCD-" + str(ds.data.id)
         # the object going into the data db
@@ -240,7 +228,7 @@ class QCATree(Tree.Tree):
         self.drop = []
 
     def node_iter_entry(
-        self, nodes=None, select=None, fn=Tree.Tree.node_iter_depth_first
+        self, nodes=None, select=None, fn=Tree.Tree.node_iter_depth_first, dereference=None
     ):
 
         # Assume here that level 3 are the entries
@@ -249,33 +237,31 @@ class QCATree(Tree.Tree):
         elif not hasattr(nodes, "__iter__"):
             nodes = [nodes]
         for top_node in nodes:
-            yield from fn(self, top_node, select="Entry")
-            # if node.payload not in self.db:
-            #     continue
-            # obj = self.db[node.payload]
-            # if "entry" in obj:
-            #     yield node
+            yield from fn(self, top_node, select="Entry", dereference=dereference)
+
+    def torsiondrives(self, nodes=None, dereference=None):
+        if nodes is None:
+            tdr_nodes = self.iter_entry(select="TorsionDrive", dereference=dereference)
+        elif not hasattr(nodes, "__iter__"):
+            tdr_nodes = self.node_iter_depth_first([nodes], select="TorsionDrive", dereference=dereference)
+        else:
+            tdr_nodes = self.node_iter_depth_first(nodes, select="TorsionDrive", dereference=dereference)
+        return tdr_nodes
+
 
     def iter_entry(self, select=None):
         yield from self.node_iter_entry(self.root(), select=select)
 
     def cache_torsiondriverecord_minimum_molecules(self, nodes=None):
-        if nodes is None:
-            tdr_nodes = self.iter_entry(select="TorsionDrive")
-        elif not hasattr(nodes, "__iter__"):
-            tdr_nodes = self.node_iter_depth_first([nodes], select="TorsionDrive")
-        else:
-            tdr_nodes = self.node_iter_depth_first(nodes, select="TorsionDrive")
+
+        tdr_nodes = self.torsiondrives(nodes, dereference=False)
         fn = __class__.node_iter_torsiondriverecord_minimum
+
         return self.cache_minimum_molecules(tdr_nodes, fn)
 
     def cache_torsiondriverecord_minimum_gradients(self, nodes=None):
-        if nodes is None:
-            tdr_nodes = self.iter_entry(select="TorsionDrive")
-        elif not hasattr(nodes, "__iter__"):
-            tdr_nodes = self.node_iter_depth_first([nodes], select="TorsionDrive")
-        else:
-            tdr_nodes = self.node_iter_depth_first(nodes, select="TorsionDrive")
+
+        tdr_nodes = self.torsiondrives(nodes, dereference=False)
         fn = __class__.node_iter_torsiondriverecord_minimum
         return self.cache_minimum_gradients(tdr_nodes, fn)
 
@@ -284,12 +270,12 @@ class QCATree(Tree.Tree):
         Visit the entries and download the initial molecules of each procedure
         """
 
-        mols = dict()
+        mols = list()
         if nodes is None:
-            nodes = self.node_iter_dive(self.root(), select="Optimization")
+            nodes = self.node_iter_dive(self.root(), select="Optimization", dereference=False)
         for opt_node in nodes:
-            opt = self[opt_node.payload]
-            final_mol_id = opt["data"]["final_molecule"]
+            opt = self.db[opt_node.payload]
+            final_mol_id = opt["data"].final_molecule
 
             if not final_mol_id is None:
                 final_mol_id = "QCM-" + str(final_mol_id)
@@ -309,18 +295,10 @@ class QCATree(Tree.Tree):
             else:
                 self.db[key]["data"] = val
 
-    def cache_initial_molecules(self):
-        """
-        Visit the entries and download the initial molecules of each procedure
-        """
-
+    def _initial_molecules_ids(self):
         mols = dict()
         for entry in self.iter_entry():
             eobj = self.db[entry.payload]["data"].__dict__
-            # if hasattr(eobj, "initial_molecule"):
-            #     init_mol_id = eobj.initial_molecule
-            # elif hasattr(eobj, "initial_molecules"):
-            #     init_mol_id = list(eobj.initial_molecules)
             if "initial_molecule" in eobj:
                 init_mol_id = eobj["initial_molecule"]
             elif "initial_molecules" in eobj:
@@ -332,9 +310,17 @@ class QCATree(Tree.Tree):
             init_mol_id = "QCM-" + str(init_mol_id)
             mols[entry.index] = init_mol_id
 
+    def cache_initial_molecules(self):
+        """
+        Visit the entries and download the initial molecules of each procedure
+        """
+
+        mols = self._initial_molecules_ids()
+
         if len(mols) == 0:
             print("No initial molecules found!")
             return
+
         mol_ids_flat = flatten_list([x for x in mols.values()], -1)
 
         client = self.db["ROOT"]["data"]
@@ -353,18 +339,17 @@ class QCATree(Tree.Tree):
         if iter_fn is None:
             iter_fn = self.node_iter_depth_first
 
-        # make a list since we iterate it twice. if its a generator the first
-        # iteration would consume the generator
         nodes = list(nodes)
         mols = {}
+
         for top_node in nodes:
             mols[top_node.index] = []
-            for node in iter_fn(self, top_node, select=stubname):
+            for node in iter_fn(self, top_node, select=stubname, dereference=False):
                 mols[top_node.index].append(node.payload)
             if mols[top_node.index] == []:
                 mols.pop(top_node.index)
+
         if len(mols) == 0:
-            print("No", fullname, "found")
             return 0
 
         ids_flat = flatten_list([x for x in mols.values()], -1)
@@ -374,14 +359,15 @@ class QCATree(Tree.Tree):
 
         for top_node in nodes:
 
-            for node in iter_fn(self, top_node, select=stubname):
+            for node in iter_fn(self, top_node, select=stubname, dereference=False):
+
                 mol = fresh_obj_map[node.payload]
                 assert mol is not None
 
                 self.db[node.payload] = DEFAULT_DB({"data": mol})
                 node.name = fullname
-                node.stamp = datetime.now()
                 self.register_modified(node, state=Node.CLEAN)
+
         return len(ids_flat)
 
     def cache_minimum_gradients(self, nodes, iter_fn=None):
@@ -389,8 +375,6 @@ class QCATree(Tree.Tree):
         return self._cache_minimum(
             nodes, "GradientStub", "Gradient", client.query_results, iter_fn
         )
-
-        # self.cache_results(nodes, select="GradientStub")
 
     def cache_minimum_molecules(self, nodes, iter_fn=None):
         client = self.db["ROOT"]["data"]
@@ -417,7 +401,7 @@ class QCATree(Tree.Tree):
         results = {}
         for top_node in nodes:
             results[top_node.index] = []
-            for node in fn(self, top_node, select=select):
+            for node in fn(self, top_node, select=select, dereference=False):
                 results[top_node.index].append(node.payload)
             if results[top_node.index] == []:
                 results.pop(top_node.index)
@@ -430,7 +414,7 @@ class QCATree(Tree.Tree):
         fresh_obj_map = self.batch_download(ids_flat, client.query_results)
 
         for top_node in nodes:
-            for node in fn(self, top_node, select=select):
+            for node in fn(self, top_node, select=select, dereference=False):
                 result = fresh_obj_map[node.payload]
                 assert result is not None
 
@@ -438,7 +422,6 @@ class QCATree(Tree.Tree):
                 self.register_modified(node, state=Node.CLEAN)
                 if "Stub" in node.name:
                     node.name = node.name[:-4]
-                node.stamp = datetime.now()
 
     def cache_optimization_minimum_molecules(self, nodes=None):
 
@@ -478,9 +461,7 @@ class QCATree(Tree.Tree):
         out_str = "Chunk "
         if projection is not None:
             out_str += "with projection "
-        kwargs = {"out_str": out_str}
-
-        from datetime import datetime, timedelta
+        kwargs = {}
 
         total = datetime.now()
 
@@ -494,15 +475,13 @@ class QCATree(Tree.Tree):
 
         for i, j in chunks:
             kwargs["molecule"] = ids[i:j]
-            args = (fn, i, j)
-            result.append(pool.apply_async(wrap_fn_hessian, args, kwargs))
+            result.append(pool.apply_async(fn, None, kwargs))
 
         total_received = 0
         for ret in tqdm.tqdm(result, total=len(result), ncols=80, desc="Requests"):
             ret = ret.get()
-            objs += ret[0]
-            # print("\r" + ret[1], end="")
-            total_received += ret[2]
+            objs += ret
+            total_received += len(ret)
 
         pool.close()
 
@@ -514,7 +493,10 @@ class QCATree(Tree.Tree):
         )
 
         # Reapply the stripped identifier
-        obj_map = {id_suf + str(obj["id"]): obj for obj in objs}
+        obj_map = {}
+        for obj in objs:
+            k = str(obj.id) if hasattr(obj, "id") else obj["id"]
+            obj_map[id_suf + k] = obj
         return obj_map
 
     def batch_download_hessian(self, full_ids, fn, max_query=1000, projection=None):
@@ -587,7 +569,11 @@ class QCATree(Tree.Tree):
         print("TotalTime: {:s}\n\n".format(str(datetime.now() - total)), end="")
 
         # Reapply the stripped identifier
-        obj_map = {id_suf + str(obj["id"]): obj for obj in objs}
+        # obj_map = {id_suf + str(getattr(obj, "id")): obj for obj in objs}
+        obj_map = {}
+        for obj in objs:
+            k = str(obj.id) if hasattr(obj, "id") else obj["id"]
+            obj_map[id_suf + k] = obj
         return obj_map
 
     def batch_download_parallel(
@@ -619,7 +605,8 @@ class QCATree(Tree.Tree):
         ids = [x.split("-")[1] for x in full_ids]
         id_suf = full_ids[0].split("-")[0] + "-"
         result = []
-        kwargs = {"out_str": out_str}
+        # kwargs = {"out_str": out_str}
+        kwargs = {}
 
         if procedure is None:
             if projection is None:
@@ -634,27 +621,22 @@ class QCATree(Tree.Tree):
             kwargs.update(kw)
 
         for i, j in chunks:
-            args = (fn, ids[i:j], i, j)
-            result.append(pool.apply_async(wrap_fn, args, kwargs))
+            args = (ids[i:j],)
+            result.append(pool.apply_async(fn, args, kwargs))
 
         total_received = 0
         for ret in tqdm.tqdm(result, total=len(result), ncols=80, desc="Requests"):
             ret = ret.get()
-            objs += ret[0]
-            # print("\r", ret[1], end="")
-            total_received += ret[2]
+            objs += ret
+            total_received += len(ret)
 
         pool.close()
 
-        # obj_map = {}
-        # for obj in objs:
-        #     if type(obj) == dict:
-        #         obj_map[id_suf + str(obj.get("id"))] = obj
-        #     else:
-        #         obj_map[id_suf + obj.id] = obj
+        obj_map = {}
+        for obj in objs:
+            k = str(obj.id) if hasattr(obj, "id") else obj["id"]
+            obj_map[id_suf + k] = obj
 
-        obj_map = {id_suf + str(obj.get("id")): obj for obj in objs}
-        # obj_map = {id_suf + obj.id: obj for obj in objs}
         print(
             "TotalTime: {:s} Received: {:d}\n\n".format(
                 str(datetime.now() - total), total_received
@@ -698,9 +680,8 @@ class QCATree(Tree.Tree):
         ids = [x.split("-")[1] for x in full_ids]
         id_suf = full_ids[0].split("-")[0] + "-"
         for i, j in chunks:
-            # if i == 0:
-            if True:
-                print("\r{:20s} {:4d} {:4d}     ".format(out_str, i, j), end="")
+            # if True:
+            #     print("\r{:20s} {:4d} {:4d}     ".format(out_str, i, j), end="")
             elapsed = datetime.now()
             if procedure is None:
                 if projection is None:
@@ -731,7 +712,11 @@ class QCATree(Tree.Tree):
                     end="",
                 )
         print("TotalTime: {:s}\n\n".format(str(datetime.now() - total)), end="")
-        obj_map = {id_suf + str(obj.get("id")): obj for obj in objs}
+        obj_map = {}
+        for obj in objs:
+            k = str(obj.id) if hasattr(obj, "id") else obj["id"]
+            obj_map[id_suf + k] = obj
+        # obj_map = {id_suf + str(getattr(obj, "id")): obj for obj in objs}
         # obj_map = {id_suf + obj.id: obj for obj in objs}
         # obj_map = {}
         # for obj in objs:
@@ -785,8 +770,8 @@ class QCATree(Tree.Tree):
         obj_map = self.batch_download(ids, client.query_procedures)
 
         # retreive all of the initial molecule IDs
-        init_mol_ids = [obj["initial_molecule"] for obj in obj_map.values()]
         # init_mol_ids = [obj.initial_molecule for obj in obj_map.values()]
+        init_mol_ids = [obj.initial_molecule for obj in obj_map.values()]
         init_mols_are_lists = False
         if isinstance(init_mol_ids[0], list):
             init_mols_are_lists = True
@@ -815,6 +800,7 @@ class QCATree(Tree.Tree):
             node = Node.Node(name="Entry", payload=pl_name)
             node = self.add(ds_node.index, node)
             self.db[pl_name] = DEFAULT_DB({"data": record})
+
             # add the specs for this entry
             if "Specification" in self.drop:
                 return
@@ -823,7 +809,7 @@ class QCATree(Tree.Tree):
                 spec_node = Node.Node(name="Specification", payload=pl_name)
                 spec_node = self.add(node.index, spec_node)
                 # self[pl_name] = DEFAULT_DB({"data": ds_specs[spec.lower()]})
-                self[pl_name] = DEFAULT_DB({"data": ds_specs[spec.lower()].dict()})
+                self[pl_name] = DEFAULT_DB({"data": ds_specs[spec.lower()]})
 
                 if name in self.drop:
                     return
@@ -835,7 +821,6 @@ class QCATree(Tree.Tree):
                     continue
 
                 proc = "QCP-" + record.object_map[spec]
-                # breakpoint()
                 pl_name = proc
                 pload = DEFAULT_DB({"data": obj_map[proc]})
                 proc_node = Node.Node(name=name, payload=pl_name)
@@ -848,7 +833,7 @@ class QCATree(Tree.Tree):
                 # perhaps inefficient, but add init mols as we travel
                 # the data, rather than all at once
                 # should help with debugging
-                molid = pload["data"]["initial_molecule"]
+                molid = pload["data"].initial_molecule
                 # molid = pload["data"].initial_molecule
                 if init_mols_are_lists:
                     for molid_i in molid:
@@ -859,37 +844,6 @@ class QCATree(Tree.Tree):
                     molid = "QCM-" + molid
                     mol_obj = init_mol_map[molid]
                     self.db[molid] = DEFAULT_DB({"data": mol_obj})
-
-        #        nodes = []
-        #        spec_data = None
-        #        for index,obj in obj_map.items():
-        #            entry_match = None
-        #            for entry in records.values():
-        #                if suf + str(entry.object_map[spec]) == index:
-        #                    entry_match = entry
-        #                    break
-        #
-        #            if entry_match is None:
-        #                raise IndexError("Could not match Entry to Record")
-        #            pl = { "entry": entry_match, "data": obj}
-        #            self.db[index] = pl
-        #            if spec_data is None:
-        #                spec_data = obj['qc_spec'].dict()
-        #                self.db['QCS-' + spec] = spec_data
-        #            procedure = Node.Node(name=name, payload=index)
-        #            procedure = self.add( spec_node.index, procedure)
-        #
-        #            # add to list to expand later below
-        #            nodes.append(procedure)
-
-        #        for node in nodes:
-        #            qcid = self.db[node.payload]
-        #            if init_mols_are_lists:
-        #                molid = 'QCM-' + str(qcid["data"]["initial_molecule"][0])
-        #            else:
-        #                molid = 'QCM-' + str(qcid["data"]["initial_molecule"])
-        #            mol_obj = init_mol_map[molid]
-        #            self.db[molid] = { "data": mol_obj}
 
         print()
 
@@ -924,7 +878,7 @@ class QCATree(Tree.Tree):
         nodes = [self.node_index.get(nid) for nid in nids]
         opt_ids = [
             list(
-                self.db.get(node.payload).get("data").get("grid_optimizations").values()
+                self.db[node.payload]["data"].grid_optimizations.values()
             )
             for node in nodes
         ]
@@ -949,14 +903,14 @@ class QCATree(Tree.Tree):
         for node in tqdm.tqdm(nodes, total=len(nodes), ncols=80, desc="GridOpt"):
 
             obj = self.db[node.payload]
-            scans = obj["data"]["keywords"].scans
+            scans = obj["data"].keywords.scans
             if len(scans) == 0:
                 print("This grid opt has no scans:", node.payload)
             elif len(scans) > 1:
                 print("This grid opt multiple scans!:", node.payload)
             scan = scans[0].__dict__
             # scan = scans[0]
-            for constraint, opts in obj["data"]["grid_optimizations"].items():
+            for constraint, opts in obj["data"].grid_optimizations.items():
                 # TODO need to cross ref the index to the actual constraint val
 
                 val = eval(constraint)
@@ -994,7 +948,7 @@ class QCATree(Tree.Tree):
 
         nodes = [self[nid] for nid in nids]
         opt_ids = [
-            list(self.db[node.payload]["data"]["optimization_history"].values())
+            list(self.db[node.payload]["data"].optimization_history.values())
             for node in nodes
         ]
         client = self.db["ROOT"]["data"]
@@ -1029,12 +983,13 @@ class QCATree(Tree.Tree):
             entry = next(self.node_iter_to_root_single(node, select="Entry"))
             entry = self.db[entry.payload]["data"]
             indices = entry.td_keywords.dihedrals[0]
-            for constraint, opts in obj["data"]["optimization_history"].items():
+            for constraint, opts in obj["data"].optimization_history.items():
                 # val = eval(constraint)
 
                 pl = ("dihedral", indices, eval(constraint)[0])
                 constraint_node = Node.Node(payload=pl, name="Constraint")
                 constraint_node = self.add(node.index, constraint_node)
+                self.register_modified(constraint_node, state=Node.CLEAN)
 
                 for index in opts:
                     index = "QCP-" + index
@@ -1042,6 +997,7 @@ class QCATree(Tree.Tree):
                     opt_nodes.append(opt_node)
                     opt_node = self.add(constraint_node.index, opt_node)
                     self.db[index] = DEFAULT_DB({"data": opt_map[index]})
+                    self.register_modified(opt_node, state=Node.CLEAN)
         print()
 
         self.branch_optimization_record([x.index for x in opt_nodes], skel=skel)
@@ -1062,13 +1018,11 @@ class QCATree(Tree.Tree):
             if "Intermediates" in self.drop:
                 result_ids = []
                 for node in nodes:
-                    ids = self.db[node.payload]["data"]["trajectory"]
-                    # ids = self.db[node.payload]["data"].trajectory
+                    ids = self.db[node.payload]["data"].trajectory
                     if not ids is None:
                         result_ids.append(ids[-1:])
                 allids = flatten_list(
-                    [self.db[node.payload]["data"]["trajectory"] for node in nodes],
-                    # [self.db[node.payload]["data"].trajectory for node in nodes],
+                    [self.db[node.payload]["data"].trajectory for node in nodes],
                     times=-1,
                 )
 
@@ -1083,7 +1037,7 @@ class QCATree(Tree.Tree):
                     )
             else:
                 result_ids = [
-                    self.db[node.payload]["data"]["trajectory"]
+                    self.db[node.payload]["data"].trajectory
                     for node in nodes
                     # self.db[node.payload]["data"].trajectory for node in nodes
                 ]
@@ -1115,10 +1069,8 @@ class QCATree(Tree.Tree):
         errors = 0
         for node in tqdm.tqdm(nodes, total=len(nodes), ncols=80, desc="Optimizations"):
             obj = self.db[node.payload]
-            traj = obj["data"]["trajectory"]
-            # traj = obj["data"].trajectory
-            status = obj["data"]["status"][:]
-            # status = obj["data"].status[:]
+            traj = obj["data"].trajectory
+            status = obj["data"].status[:]
             if status == "COMPLETE":
                 node.state = Node.CLEAN
                 completes += 1
@@ -1137,11 +1089,11 @@ class QCATree(Tree.Tree):
                     index = suf + index
                     name = "GradientStub" if skel else "Gradient"
                     result_node = Node.Node(name=name, payload=index)
-                    result_node.set_state(Node.CLEAN)
                     result_nodes.append(result_node)
                     result_node = self.add(node.index, result_node)
                     pl = {} if skel else result_map[index]
                     self.db[index] = DEFAULT_DB({"data": pl})
+                    self.register_modified(result_node, state=Node.CLEAN)
             else:
                 print("No gradient information for", node, ": Not complete?")
 
@@ -1173,16 +1125,16 @@ class QCATree(Tree.Tree):
 
         mol_nodes = []
         gradstubs = [
-            # node for node in nodes if not hasattr(self.db[node.payload]["data"], "molecule")
-            node
-            for node in nodes
-            if ("molecule" not in self.db[node.payload]["data"])
+            node for node in nodes if not hasattr(self.db[node.payload]["data"], "molecule")
+            # node
+            # for node in nodes
+            # if ("molecule" not in self.db[node.payload]["data"])
         ]
         fullgrads = [
-            node
-            for node in nodes
-            if ("molecule" in self.db[node.payload]["data"])
-            # node for node in nodes if hasattr(self.db[node.payload]["data"], "molecule")
+            # node
+            # for node in nodes
+            # if ("molecule" in self.db[node.payload]["data"])
+            node for node in nodes if hasattr(self.db[node.payload]["data"], "molecule")
         ]
 
         mol_map = {}
@@ -1215,8 +1167,8 @@ class QCATree(Tree.Tree):
         else:
             print("Downloading molecule information for", len(nodes))
             mol_map = self.batch_download(
-                [suf + self.db[node.payload]["data"]["molecule"] for node in nodes],
-                # [suf + self.db[node.payload]["data"].molecule for node in nodes],
+                # [suf + self.db[node.payload]["data"]["molecule"] for node in nodes],
+                [suf + self.db[node.payload]["data"].molecule for node in nodes],
                 client.query_molecules,
             )
 
@@ -1225,8 +1177,9 @@ class QCATree(Tree.Tree):
                 print(node)
                 assert False
             else:
-                index = suf + self.db[node.payload]["data"]["molecule"]
-                # index = suf + self.db[node.payload]["data"].molecule
+                obj = self.db[node.payload]["data"]
+                index = obj.molecule if hasattr(obj, "molecule") else obj["molecule"]
+                index = suf + index
                 if index in mol_map:
                     name = "MoleculeStub" if skel else "Molecule"
                     state = "NEW" if skel else "CLEAN"
@@ -1270,11 +1223,12 @@ class QCATree(Tree.Tree):
                 payload = mol.payload
                 for hess in hess_objs:
                     pl = hess_objs[hess]
-                    if payload == ("QCM-" + pl["molecule"]):
+                    if payload == ("QCM-" + pl.molecule):
                         hess_node = Node.Node(name="Hessian", payload=hess)
                         hess_node.state = Node.CLEAN
                         hess_node = self.add(mol.index, hess_node)
                         self.db[hess] = DEFAULT_DB({"data": pl})
+                        self.register_modified(hess_node, state=Node.CLEAN)
 
     def torsiondriverecord_minimum(self, tdr_nodes):
 
@@ -1282,7 +1236,7 @@ class QCATree(Tree.Tree):
             tdr_nodes = list(tdr_nodes)
         ret = {}
         for tdr_node in tdr_nodes:
-            tdr = self.db[tdr_node.payload]["data"]
+            tdr = self.db[tdr_node.payload]["data"].dict()
             minimum_positions = tdr["minimum_positions"]
             # minimum_positions = tdr.minimum_positions
             opt_hist = tdr["optimization_history"]
@@ -1354,7 +1308,7 @@ class QCATree(Tree.Tree):
 
         for tdr_node in tdr_nodes:
 
-            tdr = self.db[tdr_node.payload]["data"]
+            tdr = self.db[tdr_node.payload]["data"].dict()
             minimum_positions = tdr["minimum_positions"]
             opt_hist = tdr["optimization_history"]
             # minimum_positions = tdr.minimum_positions

@@ -185,9 +185,9 @@ class QCArchiveSpellBook:
             enes = []
             for opt in self.QCA.node_iter_depth_first(folder, select="Optimization"):
                 rec = self.QCA.db[opt.payload]["data"]
-                if rec["status"] == "COMPLETE":
+                if rec.status[:] == "COMPLETE":
                     try:
-                        enes.append(rec["energies"][-1])
+                        enes.append(rec.energies[-1])
                     except TypeError:
                         print("This optimization is COMPLETE but has no energy!")
 
@@ -571,7 +571,7 @@ class QCArchiveSpellBook:
                             if mol == []:
                                 print("case 2")
                                 continue
-                        ene = opt["data"]["energies"][-1]
+                        ene = opt["data"].energies[-1]
                         if qmmin is None or ene < qmmin:
                             qmmin = ene
                             min_id = nmol.payload
@@ -580,7 +580,7 @@ class QCArchiveSpellBook:
                         if (
                             omm_op is not None
                             and omm_op.db[nmol.payload]["data"]["energy"] is not None
-                            and len(opt["data"]["energies"]) > 0
+                            and len(opt["data"].energies) > 0
                         ):
 
                             mmenes[nmol.payload] = omm_op.db[nmol.payload]["data"][
@@ -616,7 +616,7 @@ class QCArchiveSpellBook:
                                 self.QCA.node_iter_to_root(nmol, select="Optimization")
                             ).payload
                         ]
-                        qene = opt["data"]["energies"][-1] - qmmin
+                        qene = opt["data"].energies[-1] - qmmin
 
                         constr = []
                         constraints = list(
@@ -646,7 +646,7 @@ class QCArchiveSpellBook:
                         # mol1 = oMM1.db[nmol.payload]['data']
                         # if mol1 == []:
                         #     continue
-                        qcmol = self.QCA.db[nmol.payload]["data"]
+                        qcmol = self.QCA.db[nmol.payload]["data"].dict()
                         if header:
                             print("#", entry, nmol, end="\n")
                             fid.write(
@@ -669,7 +669,7 @@ class QCArchiveSpellBook:
                             if wbo:
                                 bo_name = "WIBERG_LOWDIN_INDICES"
                                 try:
-                                    wbo_vec = grad["extras"]["qcvars"][bo_name]
+                                    wbo_vec = grad.extras["qcvars"][bo_name]
                                     wbo_val = wbo_vec[i[1] * int(len(wbo_vec) ** 0.5) + i[2]]
                                 except Exception:
                                     wbo_val = np.nan
@@ -1134,184 +1134,160 @@ class QCArchiveSpellBook:
         QCA = self.QCA
         for ds_id in QCA.root().children:
             ds_node = QCA[ds_id]
-            specs = [
-                n for n in QCA.node_iter_depth_first(ds_node) if "QCS" in n.payload
-            ]
+            client = QCA.db[ds_node.payload]['data'].client
             fid.write("==== DATASET ==== {}\n".format(ds_node.name))
-            for spec in specs:
-                mindepth = QCA.node_depth(spec)
-                tdi = 0
-                for node in QCA.node_iter_dive(spec):
-                    i = QCA.node_depth(node) - mindepth + 1
-                    status = ""
-                    statbar = "    "
-                    errmsg = ""
-                    hasstat = False
-                    try:
-                        hasstat = "status" in QCA.db[node.payload]["data"]
-                    except Exception:
-                        pass
-                    if hasstat:
-                        status = QCA.db[node.payload]["data"]["status"][:]
-                        if status == "ERROR" and node.name == "Optimization":
-                            try:
-                                statbar = "----"
-                                qcp = QCA.db[node.payload]["data"]
-                                client = qcp["client"]
-                                # print("error", qcp['error'], qcp['error'] is None)
+            for entry in QCA.iter_entry():
+                specs = [
+                    n for n in QCA.node_iter_depth_first(entry) if "QCS" in n.payload
+                ]
+                for spec in specs:
+                    mindepth = QCA.node_depth(spec)
+                    tdi = 0
+                    for node in QCA.node_iter_dive(spec):
+                        i = QCA.node_depth(node) - mindepth + 1
+                        status = ""
+                        statbar = "    "
+                        errmsg = ""
+                        hasstat = False
 
-                                errtype = ""
-                                xyzerrmsg = ""
-                                if not (qcp["error"] is None):
-                                    err = json.loads(
-                                        list(
-                                            client.query_kvstore(
-                                                int(qcp["error"])
-                                            ).values()
-                                        )[0]
-                                        .dict()["data"]
-                                        .decode()
-                                    )
-                                    errmsg += "####ERROR####\n"
-                                    errmsg += "Error type: " + err["error_type"] + "\n"
-                                    errmsg += "Error:\n" + err["error_message"]
-                                    errmsg += "############\n"
-                                    if (
-                                        "RuntimeError: Not bracketed"
-                                        in err["error_message"]
-                                    ):
-                                        errtype = "bracketed"
-                                    elif (
-                                        "Cannot continue a constrained optimization; please implement constrained optimization in Cartesian coordinates"
-                                        in err["error_message"]
-                                    ):
-                                        errtype = "cartconstr"
-                                    elif (
-                                        "numpy.linalg.LinAlgError: Eigenvalues did not converge"
-                                        in err["error_message"]
-                                    ):
-                                        errtype = "numpy-eigh"
-                                    elif (
-                                        "geometric.errors.GeomOptNotConvergedError: Optimizer.optimizeGeometry() failed to converge."
-                                        in err["error_message"]
-                                    ):
-                                        errtype = "optconverge"
-                                    elif (
-                                        "RuntimeError: Unsuccessful run. Possibly -D variant not available in dftd3 version."
-                                        in err["error_message"]
-                                    ):
-                                        errtype = "dftd3variant"
-                                    elif (
-                                        "Could not converge SCF iterations"
-                                        in err["error_message"]
-                                    ):
-                                        errtype = "scfconv"
-                                    elif (
-                                        "distributed.scheduler.KilledWorker"
-                                        in err["error_message"]
-                                    ):
-                                        errtype = "needsrestart-daskkilled"
-                                    elif (
-                                        "struct.error: unpack requires a buffer of"
-                                        in err["error_message"]
-                                    ):
-                                        errtype = "needsrestart-anistructunpack"
-                                    elif (
-                                        "concurrent.futures.process.BrokenProcessPool"
-                                        in err["error_message"]
-                                    ):
-                                        errtype = "needsrestart-brokenpool"
-                                    elif (
-                                        len(err["error_message"].strip().strip("\n"))
-                                        == 0
-                                    ):
-                                        errtype = "emptyerror"
-                                    else:
-                                        errtype = "nocategory"
+                        try:
+                            # hasstat = "status" in QCA.db[node.payload]["data"]
+                            hasstat = hasattr(QCA.db[node.payload]["data"], "status")
+                        except Exception:
+                            pass
+                        if hasstat:
+                            qcp = QCA.db[node.payload]["data"].dict()
+                            status = qcp["status"][:]
+                            if status == "ERROR" and node.name == "Optimization":
+                                try:
+                                    statbar = "----"
+                                    # print("error", qcp['error'], qcp['error'] is None)
 
-                                    for line in err["error_message"].split("\n")[::-1]:
-                                        if len(line) > 0:
-                                            xyzerrmsg = line
-                                            break
-
-                                elif status == "ERROR":
-                                    errmsg += "####FATAL####\n"
-                                    errmsg += "Job errored and no error on record. Input likely bogus; check your settings\n"
-                                    errmsg += "############\n"
-                                    errtype = "bogus"
-                                    xyzerrmsg = "Job errored and no error on record. Input likely bogus; check your settings"
-
-                                if len(errtype) > 0:
-                                    traj = list(
-                                        QCA.node_iter_depth_first(
-                                            node, select="Molecule"
+                                    errtype = ""
+                                    xyzerrmsg = ""
+                                    if not (qcp["error"] is None):
+                                        err = json.loads(
+                                            list(
+                                                client.query_kvstore(
+                                                    int(qcp["error"])
+                                                ).values()
+                                            )[0]
+                                            .dict()["data"]
+                                            .decode()
                                         )
-                                    )
-                                    metadata = ""
-                                    tdids = [
-                                        n.payload
-                                        for n in QCA.node_iter_to_root(
-                                            node, select="TorsionDrive"
-                                        )
-                                    ]
+                                        errmsg += "####ERROR####\n"
+                                        errmsg += "Error type: " + err["error_type"] + "\n"
+                                        errmsg += "Error:\n" + err["error_message"]
+                                        errmsg += "############\n"
+                                        if (
+                                            "RuntimeError: Not bracketed"
+                                            in err["error_message"]
+                                        ):
+                                            errtype = "bracketed"
+                                        elif (
+                                            "Cannot continue a constrained optimization; please implement constrained optimization in Cartesian coordinates"
+                                            in err["error_message"]
+                                        ):
+                                            errtype = "cartconstr"
+                                        elif (
+                                            "numpy.linalg.LinAlgError: Eigenvalues did not converge"
+                                            in err["error_message"]
+                                        ):
+                                            errtype = "numpy-eigh"
+                                        elif (
+                                            "geometric.errors.GeomOptNotConvergedError: Optimizer.optimizeGeometry() failed to converge."
+                                            in err["error_message"]
+                                        ):
+                                            errtype = "optconverge"
+                                        elif (
+                                            "RuntimeError: Unsuccessful run. Possibly -D variant not available in dftd3 version."
+                                            in err["error_message"]
+                                        ):
+                                            errtype = "dftd3variant"
+                                        elif (
+                                            "Could not converge SCF iterations"
+                                            in err["error_message"]
+                                        ):
+                                            errtype = "scfconv"
+                                        elif (
+                                            "distributed.scheduler.KilledWorker"
+                                            in err["error_message"]
+                                        ):
+                                            errtype = "needsrestart-daskkilled"
+                                        elif (
+                                            "struct.error: unpack requires a buffer of"
+                                            in err["error_message"]
+                                        ):
+                                            errtype = "needsrestart-anistructunpack"
+                                        elif (
+                                            "concurrent.futures.process.BrokenProcessPool"
+                                            in err["error_message"]
+                                        ):
+                                            errtype = "needsrestart-brokenpool"
+                                        elif (
+                                            len(err["error_message"].strip().strip("\n"))
+                                            == 0
+                                        ):
+                                            errtype = "emptyerror"
+                                        else:
+                                            errtype = "nocategory"
 
-                                    if len(tdids) > 0:
-                                        metadata += "TdIDs " + ".".join(tdids) + " "
+                                        for line in err["error_message"].split("\n")[::-1]:
+                                            if len(line) > 0:
+                                                xyzerrmsg = line
+                                                break
 
-                                    contrs = [
-                                        str(n.payload)
-                                        for n in QCA.node_iter_to_root(
-                                            node, select="Constraint"
-                                        )
-                                    ]
-                                    if len(contrs) > 0:
-                                        metadata += (
-                                            "Constraints " + ".".join(contrs) + " "
-                                        )
+                                    elif status == "ERROR":
+                                        errmsg += "####FATAL####\n"
+                                        errmsg += "Job errored and no error on record. Input likely bogus; check your settings\n"
+                                        errmsg += "############\n"
+                                        errtype = "bogus"
+                                        xyzerrmsg = "Job errored and no error on record. Input likely bogus; check your settings"
 
-                                    tdname = ".".join(tdids)
-                                    if len(tdname) > 0:
-                                        tdname += "."
-                                    if len(traj) > 0 and save_xyz:
-                                        fname = (
-                                            "geometric."
-                                            + errtype
-                                            + ".traj."
-                                            + tdname
-                                            + node.payload
-                                            + "."
-                                            + traj[-1].payload
-                                            + ".xyz"
-                                        )
-                                        # print("Trajectory found... saving", fname)
-                                        mol = QCA.db[traj[-1].payload]["data"]
-                                        with open(fname, "w") as xyzfid:
-                                            _ = offsb.qcarchive.qcmol_to_xyz(
-                                                mol,
-                                                fd=xyzfid,
-                                                comment=metadata
-                                                + "OptID "
-                                                + node.payload
-                                                + " MoleculeID "
-                                                + traj[-1].payload
-                                                + " Error= "
-                                                + xyzerrmsg,
+                                    if len(errtype) > 0:
+                                        traj = list(
+                                            QCA.node_iter_depth_first(
+                                                node, select="Molecule"
                                             )
-                                    else:
-                                        mol_id = "QCM-" + qcp["initial_molecule"]
-                                        fname = (
-                                            "geometric."
-                                            + errtype
-                                            + ".initial."
-                                            + tdname
-                                            + node.payload
-                                            + "."
-                                            + mol_id
-                                            + ".xyz"
                                         )
-                                        # print("Trajectory not found... saving input molecule", fname)
-                                        mol = QCA.db[mol_id]["data"]
-                                        if "geometry" in mol and "symbols" in mol and save_xyz:
+                                        metadata = ""
+                                        tdids = [
+                                            n.payload
+                                            for n in QCA.node_iter_to_root(
+                                                node, select="TorsionDrive"
+                                            )
+                                        ]
+
+                                        if len(tdids) > 0:
+                                            metadata += "TdIDs " + ".".join(tdids) + " "
+
+                                        contrs = [
+                                            str(n.payload)
+                                            for n in QCA.node_iter_to_root(
+                                                node, select="Constraint"
+                                            )
+                                        ]
+                                        if len(contrs) > 0:
+                                            metadata += (
+                                                "Constraints " + ".".join(contrs) + " "
+                                            )
+
+                                        tdname = ".".join(tdids)
+                                        if len(tdname) > 0:
+                                            tdname += "."
+                                        if len(traj) > 0 and save_xyz:
+                                            fname = (
+                                                "geometric."
+                                                + errtype
+                                                + ".traj."
+                                                + tdname
+                                                + node.payload
+                                                + "."
+                                                + traj[-1].payload
+                                                + ".xyz"
+                                            )
+                                            # print("Trajectory found... saving", fname)
+                                            mol = QCA.db[traj[-1].payload]["data"].dict()
                                             with open(fname, "w") as xyzfid:
                                                 _ = offsb.qcarchive.qcmol_to_xyz(
                                                     mol,
@@ -1320,63 +1296,90 @@ class QCArchiveSpellBook:
                                                     + "OptID "
                                                     + node.payload
                                                     + " MoleculeID "
-                                                    + mol_id
+                                                    + traj[-1].payload
                                                     + " Error= "
                                                     + xyzerrmsg,
                                                 )
                                         else:
-                                            # print("Initial molecule missing!")
-                                            errmsg += "XXXXISSUEXXXX\n"
-                                            errmsg += "Initial molecule was missing!\n"
-                                            errmsg += "xxxxxxxxxxxxx\n"
-                                if not (qcp["stdout"] is None):
-                                    msg = list(
-                                        client.query_kvstore(
-                                            int(qcp["stdout"])
-                                        ).values()
-                                    )[0]
-                                    errmsg += "xxxxISSUExxxx\n"
-                                    errmsg += "Status was not complete; stdout is:\n"
-                                    errmsg += msg
-                                    errmsg += "xxxxxxxxxxxxx\n"
-                                if not (qcp["stderr"] is None):
-                                    msg = list(
-                                        client.query_kvstore(
-                                            int(qcp["stderr"])
-                                        ).values()
-                                    )[0]
-                                    errmsg += "####ISSUE####\n"
-                                    errmsg += "Status was not complete; stderr is:\n"
-                                    errmsg += msg
-                                    errmsg += "#############\n"
-                            except Exception as e:
-                                fid.write(
-                                    "Internal issue:\n"
-                                    + str(type(e))
-                                    + "\n"
-                                    + str(e)
-                                    + "\n"
-                                )
+                                            mol_id = "QCM-" + qcp["initial_molecule"]
+                                            fname = (
+                                                "geometric."
+                                                + errtype
+                                                + ".initial."
+                                                + tdname
+                                                + node.payload
+                                                + "."
+                                                + mol_id
+                                                + ".xyz"
+                                            )
+                                            # print("Trajectory not found... saving input molecule", fname)
+                                            mol = QCA.db[mol_id]["data"].dict()
+                                            if "geometry" in mol and "symbols" in mol and save_xyz:
+                                                with open(fname, "w") as xyzfid:
+                                                    _ = offsb.qcarchive.qcmol_to_xyz(
+                                                        mol,
+                                                        fd=xyzfid,
+                                                        comment=metadata
+                                                        + "OptID "
+                                                        + node.payload
+                                                        + " MoleculeID "
+                                                        + mol_id
+                                                        + " Error= "
+                                                        + xyzerrmsg,
+                                                    )
+                                            else:
+                                                # print("Initial molecule missing!")
+                                                errmsg += "XXXXISSUEXXXX\n"
+                                                errmsg += "Initial molecule was missing!\n"
+                                                errmsg += "xxxxxxxxxxxxx\n"
+                                    if not (qcp["stdout"] is None):
+                                        msg = list(
+                                            client.query_kvstore(
+                                                int(qcp["stdout"])
+                                            ).values()
+                                        )[0]
+                                        errmsg += "xxxxISSUExxxx\n"
+                                        errmsg += "Status was not complete; stdout is:\n"
+                                        errmsg += msg
+                                        errmsg += "xxxxxxxxxxxxx\n"
+                                    if not (qcp["stderr"] is None):
+                                        msg = list(
+                                            client.query_kvstore(
+                                                int(qcp["stderr"])
+                                            ).values()
+                                        )[0]
+                                        errmsg += "####ISSUE####\n"
+                                        errmsg += "Status was not complete; stderr is:\n"
+                                        errmsg += msg
+                                        errmsg += "#############\n"
+                                except Exception as e:
+                                    fid.write(
+                                        "Internal issue:\n"
+                                        + str(type(e))
+                                        + "\n"
+                                        + str(e)
+                                        + "\n"
+                                    )
 
-                        if status != "COMPLETE" and node.name == "TorsionDrive":
-                            statbar = "XXXX"
-                    tderror = False
-                    if node.name == "TorsionDrive" and status != "COMPLETE":
-                        tdi += 1
-                        tderror = True
-                    if full_report or (len(errmsg) > 0 or tderror):
-                        out_str = "{:2d} {} {} {}\n".format(
-                            tdi,
-                            statbar * i,
-                            " ".join(
-                                [str(node.index), str(node.name), str(node.payload)]
-                            ),
-                            status,
-                        )
-                        fid.write(out_str)
-                        if errmsg != "":
-                            err_str = "\n{}\n".format(errmsg)
-                            fid.write(err_str)
+                            if status != "COMPLETE" and node.name == "TorsionDrive":
+                                statbar = "XXXX"
+                        tderror = False
+                        if node.name == "TorsionDrive" and status != "COMPLETE":
+                            tdi += 1
+                            tderror = True
+                        if full_report or (len(errmsg) > 0 or tderror):
+                            out_str = "{:2d} {} {} {}\n".format(
+                                tdi,
+                                statbar * i,
+                                " ".join(
+                                    [str(node.index), str(node.name), str(node.payload)]
+                                ),
+                                status,
+                            )
+                            fid.write(out_str)
+                            if errmsg != "":
+                                err_str = "\n{}\n".format(errmsg)
+                                fid.write(err_str)
 
         fid.write("____Done____\n")
 
