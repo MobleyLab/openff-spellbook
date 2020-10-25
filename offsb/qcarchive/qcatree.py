@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 
 import math
-from datetime import datetime, timedelta
+from datetime import datetime
 
-import numpy as np
 import tqdm
 
-import qcfractal.interface as ptl
-import treedi.node as Node
-import treedi.tree as Tree
-from treedi.tree import DebugDict
+import offsb.treedi.node as Node
+import offsb.treedi.tree as Tree
+from offsb.treedi.tree import DebugDict
 
 from ..tools.util import flatten_list
 from .qca_comparisons import match_canonical_isomeric_explicit_hydrogen_smiles
@@ -144,7 +142,11 @@ class QCATree(Tree.Tree):
         new_nodes = []
 
         if targets is None:
-            entries = list(self.node_iter_depth_first(self.root(), select="Entry", dereference=False))
+            entries = list(
+                self.node_iter_depth_first(
+                    self.root(), select="Entry", dereference=False
+                )
+            )
         elif hasattr(targets, "__iter__"):
             entries = list(targets)
         else:
@@ -228,7 +230,11 @@ class QCATree(Tree.Tree):
         self.drop = []
 
     def node_iter_entry(
-        self, nodes=None, select=None, fn=Tree.Tree.node_iter_depth_first, dereference=None
+        self,
+        nodes=None,
+        select=None,
+        fn=Tree.Tree.node_iter_depth_first,
+        dereference=None,
     ):
 
         # Assume here that level 3 are the entries
@@ -243,11 +249,14 @@ class QCATree(Tree.Tree):
         if nodes is None:
             tdr_nodes = self.iter_entry(select="TorsionDrive", dereference=dereference)
         elif not hasattr(nodes, "__iter__"):
-            tdr_nodes = self.node_iter_depth_first([nodes], select="TorsionDrive", dereference=dereference)
+            tdr_nodes = self.node_iter_depth_first(
+                [nodes], select="TorsionDrive", dereference=dereference
+            )
         else:
-            tdr_nodes = self.node_iter_depth_first(nodes, select="TorsionDrive", dereference=dereference)
+            tdr_nodes = self.node_iter_depth_first(
+                nodes, select="TorsionDrive", dereference=dereference
+            )
         return tdr_nodes
-
 
     def iter_entry(self, select=None):
         yield from self.node_iter_entry(self.root(), select=select)
@@ -272,7 +281,9 @@ class QCATree(Tree.Tree):
 
         mols = list()
         if nodes is None:
-            nodes = self.node_iter_dive(self.root(), select="Optimization", dereference=False)
+            nodes = self.node_iter_dive(
+                self.root(), select="Optimization", dereference=False
+            )
         for opt_node in nodes:
             opt = self.db[opt_node.payload]
             final_mol_id = opt["data"].final_molecule
@@ -877,9 +888,7 @@ class QCATree(Tree.Tree):
             nids = [nids]
         nodes = [self.node_index.get(nid) for nid in nids]
         opt_ids = [
-            list(
-                self.db[node.payload]["data"].grid_optimizations.values()
-            )
+            list(self.db[node.payload]["data"].grid_optimizations.values())
             for node in nodes
         ]
         client = self.db["ROOT"]["data"]
@@ -1125,7 +1134,9 @@ class QCATree(Tree.Tree):
 
         mol_nodes = []
         gradstubs = [
-            node for node in nodes if not hasattr(self.db[node.payload]["data"], "molecule")
+            node
+            for node in nodes
+            if not hasattr(self.db[node.payload]["data"], "molecule")
             # node
             # for node in nodes
             # if ("molecule" not in self.db[node.payload]["data"])
@@ -1134,7 +1145,9 @@ class QCATree(Tree.Tree):
             # node
             # for node in nodes
             # if ("molecule" in self.db[node.payload]["data"])
-            node for node in nodes if hasattr(self.db[node.payload]["data"], "molecule")
+            node
+            for node in nodes
+            if hasattr(self.db[node.payload]["data"], "molecule")
         ]
 
         mol_map = {}

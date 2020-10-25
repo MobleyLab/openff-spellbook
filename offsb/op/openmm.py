@@ -2,28 +2,20 @@
 import copy
 import logging
 import os
-import pdb
 import sys
 import tempfile
-import threading
-from multiprocessing import Pool
 
 import numpy as np
 import offsb.op.geometry
 import simtk.unit
 import simtk.unit as unit
-import smirnoff99frosst as ff
-import treedi
-import treedi.tree
+import offsb.treedi
+import offsb.treedi.tree
 from rdkit import Chem
-from rdkit import Geometry as RDGeom
-from rdkit.Chem import AllChem, FragmentMatcher
 from simtk import openmm
-from simtk.openmm.app.simulation import Simulation as OpenMMSimulation
 
 import openforcefield as oFF
-from openforcefield.topology import Molecule, Topology
-from openforcefield.typing.engines.smirnoff import ForceField
+from openforcefield.topology import Molecule
 from openforcefield.typing.engines.smirnoff.parameters import \
     UnassignedProperTorsionParameterException
 
@@ -63,7 +55,7 @@ def load_geometric_opt_trj_xyz(fnm, dims=3):
     return sym, xyz, np.array(ene_in_au)
 
 
-class OpenMMEnergy(treedi.tree.PartitionTree):
+class OpenMMEnergy(offsb.treedi.tree.PartitionTree):
     """Creates an openMM system of each entry
     Stores the total energy of molecules
     """

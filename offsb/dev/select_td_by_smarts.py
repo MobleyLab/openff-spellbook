@@ -42,7 +42,7 @@ def match_td_smiles(QCA, smitree, indices):
 
     Returns
     -------
-    match_entries : List[treedi.node.Node]
+    match_entries : List[offsb.treedi.node.Node]
         A list of nodes corresponding to QCArchive TDEntry objects
     """
 

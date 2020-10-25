@@ -9,7 +9,7 @@ from offsb.op import geometry
 from offsb.op import openforcefield
 from offsb.op import openmm
 from offsb.search import smiles
-import treedi.node as Node
+import offsb.treedi.node as Node
 
 
 

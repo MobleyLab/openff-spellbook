@@ -1,42 +1,11 @@
 #!/usr/bin/env python3
-import os
-import pdb
-import treedi
-import treedi.tree
-import simtk.unit
-import simtk.unit as unit
-from simtk import openmm
-from simtk.openmm.app.simulation import Simulation as OpenMMSimulation
-import openforcefield as oFF
-from openforcefield.typing.engines.smirnoff.parameters import (
-    UnassignedProperTorsionParameterException,
-)
-from openforcefield.topology import Molecule
-from openforcefield.topology import Topology
-from openforcefield.typing.engines.smirnoff import ForceField
-import smirnoff99frosst as ff
-from rdkit import Chem
-from rdkit.Chem import AllChem
-from rdkit.Chem import FragmentMatcher
-from rdkit import Geometry as RDGeom
-from ..tools import const
-from .. import rdutil
-from .. import qcarchive as qca
+import offsb.treedi
+import offsb.treedi.tree
 import offsb.op.geometry
-import copy
-import numpy as np
-from multiprocessing import Pool
-import threading
-import sys
-import tempfile
-
-from chemper.mol_toolkits.cp_rdk import Mol
-from chemper.smirksify import SMIRKSifier, print_smirks
-import contextlib
 import re
 
 
-class ChemperOperation(treedi.tree.TreeOperation):
+class ChemperOperation(offsb.treedi.tree.TreeOperation):
     """ Given a set of indices, find the SMARTS representation
 
     """
@@ -166,16 +135,6 @@ class ChemperOperation(treedi.tree.TreeOperation):
 
         return {target.payload: None, "return": {target.payload: {"data": chemper}}}
 
-        # for label_type in self._LABEL_TYPES:
-        #     chemper[label_type] = {}
-        #     for bond, lbl in labels[label_type].items():
-        #         mapped_bond = tuple([map_inv[i] for i in bond])
-        #         pat = ("name", [[mapped_bond]])
-        #         with open("/dev/null", "w") as f:
-        #             with contextlib.redirect_stdout(f):
-        #                 fier = SMIRKSifier([mol], [pat], verbose=True, max_layers=3)
-        #         chemper[label_type][bond] = (fier.current_smirks[0][1], lbl) return {target.payload: out_str, "return": {"data": chemper}}
-
     def apply(self, targets=None):
         super().apply(targets=targets, select=self._select)
 
@@ -250,4 +209,3 @@ class ChemperOperation(treedi.tree.TreeOperation):
                 for line in sorted(lines, key=lambda x: "".join(x.split()[1:])):
                     print(line)
 
-    ########################################
