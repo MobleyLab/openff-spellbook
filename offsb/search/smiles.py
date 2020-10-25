@@ -68,7 +68,10 @@ class SmilesSearchTree(Tree.PartitionTree):
             #     continue
             obj = self.source.db[target.payload]["data"].dict()
             attrs = obj["attributes"]
-            smiles_pattern = attrs[CIEHMS]
+            try:
+                smiles_pattern = attrs[CIEHMS]
+            except KeyError:
+                breakpoint()
             # mol = Chem.MolFromSmiles(smiles_pattern, sanitize=False)
             mol = offsb.rdutil.mol.build_from_smiles(smiles_pattern)
             # mol = Chem.AddHs(mol)

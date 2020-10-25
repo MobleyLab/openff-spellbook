@@ -8,8 +8,8 @@ del get_versions
 
 
 def qcmol_to_xyz(qcmol, atom_map=None, fnm=None, fd=None, comment=""):
-    syms = qcmol["symbols"]
-    xyz = qcmol["geometry"]
+    syms = qcmol.symbols
+    xyz = qcmol.geometry
 
     if atom_map:
         idx = sorted(list(atom_map.keys()))

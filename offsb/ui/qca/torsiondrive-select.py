@@ -31,9 +31,9 @@ if __name__ == "__main__":
     parser.add_argument("--exact", action="store_true")
     parser.add_argument("--smarts", type=str, default="[*:1]~[*:2]~[*:3]~[*:4]")
 
-    mm_choices = ["None", "all", "vdw", "bonds", "angles", "dihedrals", "outofplanes"]
+    mm_choices = ["all", "vdw", "bonds", "angles", "dihedrals", "outofplanes"]
 
-    parser.add_argument("--mm-energy", choices=mm_choices, default="all")
+    parser.add_argument("--mm-energy", choices=mm_choices, default=None)
     parser.add_argument("--mm-minimize", action="store_true")
     parser.add_argument("--mm-constrain", action="store_true")
     parser.add_argument("--mm-geometric", action="store_true")

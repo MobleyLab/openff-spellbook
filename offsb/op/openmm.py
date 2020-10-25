@@ -75,6 +75,9 @@ class OpenMMEnergy(offsb.treedi.tree.PartitionTree):
         self.minimize = False
         self.constrain = False
         self.geometric = True
+
+        # Seems to bottleneck at 4, so mask here to avoid memory waste
+        self.processes = 4
         search_pth = list(
             iter_entry_points(group="openforcefield.smirnoff_forcefield_directory")
         )
@@ -89,6 +92,7 @@ class OpenMMEnergy(offsb.treedi.tree.PartitionTree):
             for entry_point in search_pth:
                 pth = entry_point.load()()[0]
                 abspth = os.path.join(pth, filename)
+                abspth = abspth if abspth.endswith("offxml") else abspth + ".offxml"
                 print("Searching", abspth)
                 if os.path.exists(abspth):
                     self.abs_path = abspth
@@ -113,12 +117,15 @@ class OpenMMEnergy(offsb.treedi.tree.PartitionTree):
     def _unpack_result(self, ret):
         self.db.update(ret)
 
-    def _generate_apply_kwargs(self, i, target, kwargs={}):
+    def _generate_apply_kwargs(self, i, target, kwargs=None):
 
         # labels = self.source.db[target.payload]["data"]
         entry = self.source.source.db[target.payload]["data"]
 
         out_str = ""
+
+        if kwargs is None:
+            kwargs = {}
 
         mol = kwargs.get("mol")
 
@@ -151,8 +158,9 @@ class OpenMMEnergy(offsb.treedi.tree.PartitionTree):
 
             mol = offsb.rdutil.mol.rdmol_from_smiles_and_qcmol(smi, qcmol)
             kwargs["mol"] = mol
+            kwargs["qcmolid"] = qcmolid
 
-    def apply_single(self, i, target):
+    def apply_single(self, i, target, **kwargs):
         def unmap(xyz, map_idx):
             inv = [(map_idx[i] - 1) for i in range(len(xyz))]
             return xyz[inv]
@@ -161,6 +169,9 @@ class OpenMMEnergy(offsb.treedi.tree.PartitionTree):
             remap_idx = {v - 1: k for k, v in map_idx.items()}
             inv = [remap_idx[i] for i in range(len(xyz))]
             return xyz[inv]
+
+        # mol = kwargs["mol"]
+        # qcmolid = kwargs["qcmolid"]
 
         ret_str = []
         # if n < 192:
@@ -233,13 +244,12 @@ class OpenMMEnergy(offsb.treedi.tree.PartitionTree):
                 for opt in self.source.node_iter_depth_first(
                     target, select="Optimization"
                 ):
-                    status = (
-                        self.source.db.get(opt.payload).get("data").get("status")[:]
-                    )
+                    opt_rec = self.source.db[opt.payload]["data"]
+                    status = opt_rec.status[:]
                     if status != "COMPLETE":
                         ret_str.append("This opt is not complete.. skipping..\n")
                         continue
-                    allene = self.source.db.get(opt.payload).get("data").get("energies")
+                    allene = opt_rec.energies
                     if allene is None:
                         ret_str.append(
                             "ERROR: No energies. {} {}\n".format("", target.payload)
@@ -279,8 +289,8 @@ class OpenMMEnergy(offsb.treedi.tree.PartitionTree):
 
             ret_str.append("min mol is {} ene is {} au\n".format(mol_node, minene))
 
-        xyz = qcmol.get("geometry")
-        sym = qcmol.get("symbols")
+        xyz = qcmol.geometry
+        sym = qcmol.symbols
         # for i, a in enumerate(mol.GetAtoms()):
         #    conf.SetAtomPosition(i, xyz[ map_idx[ i] - 1] * const.bohr2angstrom)
 
@@ -359,7 +369,7 @@ class OpenMMEnergy(offsb.treedi.tree.PartitionTree):
         for mol_node in nodes_in_order:
             fail = True
             qcmol = self.source.db[mol_node.payload]["data"]
-            xyz = qcmol["geometry"]
+            xyz = qcmol.geometry
             xyz = xyz * const.bohr2angstrom
 
             # this will take the xyz from qcmol and put them in the order of
@@ -387,7 +397,6 @@ class OpenMMEnergy(offsb.treedi.tree.PartitionTree):
                 # print("angle before OpenMM is ", self.calculate_dihedral(xyz, *constraints[0][0])/unit.degrees)
                 # print("constraints are", constraints)
             try:
-                exc_info = sys.exc_info()
                 total_ene, pos = self.calc_mm_energy(
                     top, xyz, charge=gen_MM_charge, constraints=constraints
                 )
@@ -419,7 +428,7 @@ class OpenMMEnergy(offsb.treedi.tree.PartitionTree):
             pl = {}
             if self.minimize and pos is not None:
                 pl = qcmol.copy()
-                pl["geometry"] = remap(np.array(pos) * const.angstrom2bohr, map_idx)
+                pl.geometry = remap(np.array(pos) * const.angstrom2bohr, map_idx)
 
             pl["energy"] = total_ene
 

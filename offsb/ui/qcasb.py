@@ -397,7 +397,7 @@ class QCArchiveSpellBook:
         ffname=None,
         bond_param=None,
         torsion_param=None,
-        energy="None",
+        energy=None,
         mm_minimize=False,
         mm_constrain=True,
         mm_geometric=True,
@@ -504,7 +504,7 @@ class QCArchiveSpellBook:
             torsion_op.apply(targets=entries)
 
         omm_op = None
-        if ffname is not None and energy != "None":
+        if ffname is not None and energy is not None:
             omm_op = offsb.op.openmm.OpenMMEnergy(ffname, self.QCA, "oMM-" + ffname)
             omm_op.minimize = mm_minimize
             # Assume we have more than the number of cpus, so we can do each one
@@ -627,10 +627,23 @@ class QCArchiveSpellBook:
 
                         if labeler is not None:
                             torsion_indices = tuple([map_inv[j] for j in constr])
-                            torsion_label = labeler.db[entry.payload]['data']['ProperTorsions'][torsion_indices]
+                            torsion_label = labeler.db[entry.payload]['data']['ProperTorsions'].get(torsion_indices)
+                            if torsion_label is None:
+                                torsion_indices = torsion_indices[::-1]
+                                try:
+                                    torsion_label = labeler.db[entry.payload]['data']['ProperTorsions'][torsion_indices]
+                                except KeyError:
+                                    # There are cases when trying to drive some weird torsions, such as 3 member rings.
+                                    # In this case, it seems the FF labels a different tuple, so it does not show up.
+                                    # We just label it as None, and then directly measure it later below, instead of 
+                                    # relying on our cached calculations (since it won't exist)
+                                    torsion_label = "None"
 
                             bond_indices = (torsion_indices[1], torsion_indices[2])
-                            bond_label = labeler.db[entry.payload]['data']['Bonds'][bond_indices]
+                            bond_label = labeler.db[entry.payload]['data']['Bonds'].get(bond_indices)
+                            if bond_label is None:
+                                bond_indices = bond_indices[::-1]
+                                bond_label = labeler.db[entry.payload]['data']['Bonds'][bond_indices]
 
                         if issubclass(type(qene), simtk.unit.quantity.Quantity):
                             qene /= simtk.unit.kilocalories_per_mole
@@ -646,7 +659,7 @@ class QCArchiveSpellBook:
                         # mol1 = oMM1.db[nmol.payload]['data']
                         # if mol1 == []:
                         #     continue
-                        qcmol = self.QCA.db[nmol.payload]["data"].dict()
+                        qcmol = self.QCA.db[nmol.payload]["data"]
                         if header:
                             print("#", entry, nmol, end="\n")
                             fid.write(
@@ -684,7 +697,7 @@ class QCArchiveSpellBook:
 
 
                             angle = offsb.op.geometry.TorsionOperation.measure_praxeolitic_single(
-                                qcmol["geometry"], i
+                                qcmol.geometry, i
                             )
 
                             if omm_op is not None:
@@ -705,7 +718,13 @@ class QCArchiveSpellBook:
                                 if labeler is not None:
                                     bond_val = bond_op.db[nmol.payload][bond_indices][0] * offsb.tools.const.bohr2angstrom
                                     out_str += " BOND= {:4s} {:8.4f}".format(bond_label, bond_val)
-                                    torsion_val = torsion_op.db[nmol.payload][torsion_indices]
+
+                                    torsion_val = torsion_op.db[nmol.payload].get(torsion_indices)
+                                    if torsion_val is None:
+                                        torsion_val = torsion_op.db[nmol.payload].get(torsion_indices[::-1])
+                                    if torsion_val is None:
+                                        torsion_val = offsb.op.geometry.TorsionOperation.measure(qcmol.geometry, torsion_indices)[0]
+
                                     out_str += " DIHE= {:4s} {:8.4f}".format(torsion_label, torsion_val)
 
                                 out_str += "\n"
@@ -724,7 +743,11 @@ class QCArchiveSpellBook:
                                 if labeler is not None:
                                     bond_val = bond_op.db[nmol.payload][bond_indices][0] * offsb.tools.const.bohr2angstrom
                                     out_str += " BOND= {:4s} {:8.4f}".format(bond_label, bond_val)
-                                    torsion_val = torsion_op.db[nmol.payload][torsion_indices]
+                                    torsion_val = torsion_op.db[nmol.payload].get(torsion_indices)
+                                    if torsion_val is None:
+                                        torsion_val = torsion_op.db[nmol.payload].get(torsion_indices[::-1])
+                                    if torsion_val is None:
+                                        torsion_val = offsb.op.geometry.TorsionOperation.measure(qcmol.geometry, torsion_indices)[0]
                                     out_str += " DIHE= {:4s} {:8.4f}".format(torsion_label, torsion_val)
                                 out_str += "\n"
                                 print(out_str, end="")
@@ -1304,7 +1327,7 @@ class QCArchiveSpellBook:
                                                 + ".xyz"
                                             )
                                             # print("Trajectory found... saving", fname)
-                                            mol = QCA.db[traj[-1].payload]["data"].dict()
+                                            mol = QCA.db[traj[-1].payload]["data"]
                                             with open(fname, "w") as xyzfid:
                                                 _ = offsb.qcarchive.qcmol_to_xyz(
                                                     mol,
@@ -1330,8 +1353,8 @@ class QCArchiveSpellBook:
                                                 + ".xyz"
                                             )
                                             # print("Trajectory not found... saving input molecule", fname)
-                                            mol = QCA.db[mol_id]["data"].dict()
-                                            if "geometry" in mol and "symbols" in mol and save_xyz:
+                                            mol = QCA.db[mol_id]["data"]
+                                            if "geometry" in mol and "symbols" in mol.dict() and save_xyz:
                                                 with open(fname, "w") as xyzfid:
                                                     _ = offsb.qcarchive.qcmol_to_xyz(
                                                         mol,
