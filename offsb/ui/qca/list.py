@@ -7,8 +7,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('server_uri', nargs='?', default=None, help='The QCArchive server to connect to')
     parser.add_argument('--all-specs', action="store_true", help='Include the specs in the list')
-    parser.add_argument('--only-specs', nargs='+', default=None, help='Only include these specs in the output (datasets without this spec will not be listed)')
-    parser.add_argument('--only-types', nargs='+', default=None, help='Only include these dataset types')
+    parser.add_argument('--only-specs', metavar="spec_name", nargs='+', default=None, help='Only include these specs in the output (datasets without this spec will not be listed)')
+    parser.add_argument('--only-types', metavar="collection_type", nargs='+', default=None, help='Only include these dataset types')
 
     args = parser.parse_args()
     server_uri = args.server_uri
