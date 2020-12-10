@@ -1,28 +1,31 @@
 #!/usr/bin/env python3
 
+import gzip
+import json
 import logging
 import os
 import shutil
 from collections import OrderedDict
+from io import BytesIO
 
 import numpy as np
-import tqdm
+from openbabel import openbabel
+from rdkit import Chem
 
+import forcebalance.forcefield
 import forcebalance.target
 import offsb.op.chemper
 import offsb.op.openforcefield
 import offsb.rdutil
 import offsb.search.smiles
+import offsb.tools.util
 import offsb.treedi.tree
-from forcebalance.forcefield import FF
 from forcebalance.objective import Objective
 from forcebalance.optimizer import Optimizer
 from forcebalance.parser import parse_inputs
-from openbabel import openbabel
 from openforcefield.typing.engines.smirnoff.forcefield import ForceField
 from openforcefield.typing.engines.smirnoff.parameters import (ImproperDict,
                                                                ValenceDict)
-from rdkit import Chem
 
 np.set_printoptions(linewidth=9999, formatter={"float_kind": "{:8.1e}".format})
 
@@ -33,15 +36,28 @@ class DummyTree:
 
 
 class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
-    def __init__(self, fbinput_fname, source_tree, name, ff_fname, init=None):
+    def __init__(
+        self, fbinput_fname, source_tree, name, ff_fname, init=None, verbose=True
+    ):
         super().__init__(source_tree, name)
         import logging
 
+        if verbose:
+            self.logger.setLevel(logging.INFO)
+        else:
+            self.logger.setLevel(logging.ERROR)
+
         self._select = "Molecule"
+
 
         if init is None:
             self._setup = ForceBalanceObjectiveOptGeoSetup(
-                fbinput_fname, source_tree, "fb_setup." + name, ff_fname, "optimize"
+                fbinput_fname,
+                source_tree,
+                "fb_setup." + name,
+                ff_fname,
+                "optimize",
+                verbose=verbose,
             )
 
         else:
@@ -57,8 +73,10 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         self._options = None
         self._tgt_opts = None
 
+        self.fitting_targets = ["geometry", "energy"]
         DummyTree.source = source_tree
-        print("My db is", self.db)
+
+        self.cwd = os.path.abspath(os.path.curdir)
 
     def _unpack_result(self, ret):
         self.db.update(ret)
@@ -68,16 +86,13 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         if kwargs is None:
             kwargs = {}
         arg = np.zeros(self._forcefield.np)
-        QCA = self.source.source
-        node = next(QCA.node_iter_depth_first(QCA.root(), select=self._select))
-        opt = next(QCA.node_iter_to_root(node, select="Optimization"))
         kwargs["arg"] = arg
-        found=False
+        found = False
         for tgt in self._objective.Targets:
             for key in tgt.internal_coordinates:
                 if target.payload in key:
                     kwargs["tgt"] = tgt
-                    found=True
+                    found = True
                     break
             if found:
                 break
@@ -100,101 +115,179 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         self._forcefield = ff
         self._objective = obj
 
-    def optimize(self, targets=None, parameterize_handlers=None, jobtype="OPTIMIZE"):
+    # def optimize(self, targets=None, parameterize_handlers=None, jobtype="OPTIMIZE"):
 
-        if self._init == False:
-            self._setup.apply(
-                targets=targets,
-                parameterize_handlers=parameterize_handlers,
-                fitting_targets=["geometry"],
-            )
-            self._init = True
-        else:
-            self.remove_tmp(clean_input=False)
+    #     if parameterize_handlers is None:
+    #         parameterize_handlers = self.parameterize_handlers
 
-        if self._options is None or self._tgt_opts is None:
-            self._options, self._tgt_opts = parse_inputs("optimize.in")
+    #     if self._init == False:
+    #         self._setup.apply(
+    #             targets=targets,
+    #             parameterize_handlers=parameterize_handlers,
+    #             fitting_targets=["geometry"],
+    #         )
+    #         self._init = True
+    #     else:
+    #         self.remove_tmp(clean_input=False)
 
-        self._options["jobtype"] = "OPTIMIZE"
+    #     if self._options is None or self._tgt_opts is None:
+    #         self._options, self._tgt_opts = parse_inputs("optimize.in")
 
-        self._forcefield = FF(self._options)
-        self.db.clear()
-        self.db["ROOT"] = {"data": self._forcefield.plist}
+    #     self._options["jobtype"] = jobtype
 
-        objective = Objective(self._options, self._tgt_opts, self._forcefield)
-        optimizer = Optimizer(self._options, objective, self._forcefield)
+    #     self._forcefield = forcebalance.forcefield.FF(self._options)
+    #     self.db.clear()
+    #     self.db["ROOT"] = {"data": self._forcefield.plist}
 
-        fb_logger = logging.getLogger("forcebalance")
-        fb_logger.setLevel(logging.INFO)
-        ans = optimizer.Run()
+    #     objective = Objective(self._options, self._tgt_opts, self._forcefield)
+    #     optimizer = Optimizer(self._options, objective, self._forcefield)
 
-        new_ff = self._setup.prefix + ".offxml"
-        self.new_ff = None
-        if os.path.exists("results/" + new_ff):
-            self.new_ff = ForceField("results/" + new_ff)
+    #     fb_logger = logging.getLogger("forcebalance")
+    #     fb_logger.setLevel(logging.INFO)
+    #     ans = optimizer.Run()
 
-    def apply(self, targets=None, parameterize_handlers=None):
+    #     new_ff = self._setup.prefix + ".offxml"
+    #     self.new_ff = None
+    #     new_ff_path = os.path.join("result", self._setup.prefix, new_ff)
+    #     if os.path.exists(new_ff_path):
+    #         self.new_ff = ForceField(new_ff_path)
 
-        if self._init == False:
-            self._setup.apply(
-                targets=targets,
-                parameterize_handlers=parameterize_handlers,
-                fitting_targets=["geometry"],
-            )
-            self._init = True
-        else:
-            self.remove_tmp(clean_input=False)
-
-        fb_logger = logging.getLogger("forcebalance")
-        fb_logger.setLevel(logging.WARN)
-
+    def load_options(self, options_override=None):
         # The general options and target options that come from parsing the input file
-        if self._options is None or self._tgt_opts is None:
-            self._options, self._tgt_opts = parse_inputs("optimize.in")
+        self._options, self._tgt_opts = parse_inputs("optimize.in")
+        if options_override is not None:
+            self._options.update(options_override)
 
-        self._forcefield = FF(self._options)
+    def apply(
+        self,
+        targets=None,
+        parameterize_handlers=None,
+        fitting_targets=None,
+        jobtype="GRADIENT",
+    ):
+
+        os.chdir(self.cwd)
+
+        if parameterize_handlers is None:
+            parameterize_handlers = self.parameterize_handlers
+
+        if fitting_targets is None:
+            fitting_targets = self.fitting_targets
+
+        if self._init is False:
+            self._setup.apply(
+                targets=targets,
+                parameterize_handlers=parameterize_handlers,
+                fitting_targets=fitting_targets,
+            )
+            self._init = True
+        else:
+            self.remove_tmp(clean_input=False)
+
+        lvl = self.logger.getEffectiveLevel()
+        fb_logger = logging.getLogger("forcebalance")
+        fb_logger.setLevel(lvl)
+
+        if self._options is None or self._tgt_opts is None:
+            self.load_options()
+        self._options["jobtype"] = jobtype
+
+        self._forcefield = forcebalance.forcefield.FF(self._options)
 
         # Because ForceBalance Targets contain unpicklable objects, we must
         # use single process
-        # TODO: use the FB work queue interface
+        # Use the work_queue implementation instead
         self.processes = 1
         opts = self._options.copy()
 
         self.db.clear()
         self.db["ROOT"] = {"data": self._forcefield.plist}
 
-        remote = opts.get("asynchronous", False)
+        # remote = opts.get("asynchronous", False)
         self._objective = Objective(opts, self._tgt_opts, self._forcefield)
 
-        if not remote:
-            super().apply(self._select, targets=targets)
-        else:
-            logging.getLogger("forcebalance").setLevel(logging.INFO)
+        optimizer = Optimizer(self._options, self._objective, self._forcefield)
 
-            # QCA = self.source.source
-            port = opts["wq_port"]
-            print("Starting WorkQueue... please start a worker and set to port", port)
-            arg = np.zeros(len(self._forcefield.plist))
-            self._objective.Full(arg, Order=1, verbose=1)
-            for tgt, dat in self._objective.ObjDict.items():
-                rec = tgt.split(".")[-1]
+        fb_logger = logging.getLogger("forcebalance")
+        # turning to info here, or else FB goes silent
+        fb_logger.setLevel(logging.INFO)
+        ans = optimizer.Run()
 
-                # skip known keys that we must skip
-                if tgt in ['Total', 'Regularization']:
-                    continue
+        self.X = 0
+        for tgt, dat in self._objective.ObjDict.items():
+            rec = tgt.split(".")[-1]
 
-                IC = dat['IC'][tgt]
+            if tgt in "Regularization":
+                self.X += dat["x"]
+            # skip known keys that we must skip
+            if tgt in ["Total", "Regularization"]:
+                continue
+
+            self.X += dat["x"]
+
+            if dat.get("IC", None) is not None:
+
+                IC = dat["IC"][rec]
                 # node = [ x for x in QCA.node_iter_depth_first(QCA.root()) if x.payload == rec ][0]
-                
+
                 ret = self._generate_ic_objective_pairs(IC, dat)
                 dat = dat.copy()
                 dat.update(ret)
 
-                if rec not in self.db:
-                    self.db[rec] = {"data": dat}
-                else:
-                    self.db[rec]["data"].update(dat)
-            logging.getLogger("forcebalance").setLevel(logging.WARN)
+            if rec not in self.db:
+                self.db[rec] = {"data": dat}
+            else:
+                self.db[rec]["data"].update(dat)
+
+        # calculates the total gradient for debugging
+        dv = None
+        for mol in self.db.values():
+            mol = mol['data']
+            for k in mol:
+                if type(k) is tuple and 'dV' in mol[k]:
+                    if dv is None:
+                        dv = mol[k]['dV']
+                    else:
+                        dv += mol[k]['dV']
+        self.G = np.linalg.norm(dv)
+
+        # if not remote:
+        #     super().apply(self._select, targets=targets)
+        # else:
+        #     logging.getLogger("forcebalance").setLevel(logging.INFO)
+
+        #     # QCA = self.source.source
+        #     port = opts["wq_port"]
+        #     print("Starting WorkQueue... please start a worker and set to port", port)
+        #     arg = np.zeros(len(self._forcefield.plist))
+        #     self._objective.Full(arg, Order=1, verbose=1)
+        #     for tgt, dat in self._objective.ObjDict.items():
+        #         rec = tgt.split(".")[-1]
+
+        #         # skip known keys that we must skip
+        #         if tgt in ["Total", "Regularization"]:
+        #             continue
+
+        #         IC = dat["IC"][rec]
+        #         # node = [ x for x in QCA.node_iter_depth_first(QCA.root()) if x.payload == rec ][0]
+
+        #         ret = self._generate_ic_objective_pairs(IC, dat)
+        #         dat = dat.copy()
+        #         dat.update(ret)
+
+        #         if rec not in self.db:
+        #             self.db[rec] = {"data": dat}
+        #         else:
+        #             self.db[rec]["data"].update(dat)
+        logging.getLogger("forcebalance").setLevel(logging.WARN)
+
+        new_ff = self._setup.prefix + ".offxml"
+        self.new_ff = None
+        new_ff_path = os.path.join("result", self._setup.prefix, new_ff)
+        if os.path.exists(new_ff_path):
+            self.new_ff = ForceField(new_ff_path, allow_cosmetic_attributes=True)
+        else:
+            self.new_ff = ForceField(self.ff_fname, allow_cosmetic_attributes=True)
 
         if self.cleanup:
             self.remove_tmp()
@@ -247,7 +340,7 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
             else:
                 integer_indices = ValenceDict.key_transform(integer_indices)
 
-            vals = v * ans["dV"][:, i]
+            vals = 2 * v * ans["dV"][:, i]
             ret[integer_indices] = {"V": v ** 2, "dV": vals}
             i += 1
         return ret
@@ -269,11 +362,10 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
             ret_obj[sys_name] = {"data": dat}
             i += len(dat)
 
-
         return {target.payload: "", "return": ret_obj}
 
 
-class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
+class ForceBalanceObjectiveTorsionDriveSetup(offsb.treedi.tree.TreeOperation):
 
     """
     This class will iterate over the data and only
@@ -284,7 +376,7 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
         super().__init__(source_tree, name)
         import logging
 
-        self._select = "Entry"
+        self._select = "TorsionDrive"
         self.prefix = prefix
 
         self.global_opts, _ = parse_inputs(fbinput_fname)
@@ -292,37 +384,39 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
         self.fbinput_fname = fbinput_fname
         self.ff_fname = ff_fname
 
+        self.parameterize_handlers = None
+
         self.processes = 1
 
         self.source = DummyTree
         DummyTree.source = source_tree
         print("My db is", self.db)
+
+        # The FB source also hardcodes a "qdata.txt" file, which
+        # reads the QM reference energy. Specifically it appears to grep the
+        # file such that it sees
+        # ENERGY 1.34
+        # ENERGY 1.24
+        # ENERGY 1.55
+        # etc etc and then pulls the energy. In the reference (the official oFF
+        # fits), the xyz and gradients are therefore not used
         self.fb_main_opts = (
             "\n"
             + "\n$target"
             + "\nname {:s}"
-            + "\ntype OptGeoTarget_SMIRNOFF"
-            + "\nweight {:8.6f}"
+            + "\ntype TorsionProfile_SMIRNOFF"
+            + "\npdb mol.pdb"
+            + "\nmol2 mol.sdf.gz"
+            + "\ncoords scan.xyz"
             + "\nwritelevel 0"
+            + "\nattenuate"
+            + "\nenergy_denom 1.0"
+            + "\nenergy_upper 5.0"
             + "\nremote 1"
             + "\n$end"
         )
 
-        self.fb_tgt_opts = (
-            "\n"
-            + "\n$global"
-            + "\nbond_denom 0.05"
-            + "\nangle_denom 8"
-            + "\ndihedral_denom 20"
-            + "\nimproper_denom 20"
-            + "\n$end"
-            + "\n\n$system"
-            + "\nname {:s}"
-            + "\ngeometry mol.xyz"
-            + "\ntopology mol.pdb"
-            + "\nmol2 mol.mol2"
-            + "\n$end"
-        )
+        self.fb_tgt_opts = ""
 
     def _apply_initialize(self, targets):
         pass
@@ -343,16 +437,414 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
             except FileExistsError:
                 pass
             path = os.path.join(dir, "mol")
-            for ext in ["pdb", "mol2", "xyz"]:
+            for ext in ["pdb", "sdf.gz"]:
                 out_str = v[ext]
-                with open(path + "." + ext, "w") as f:
+                mode = "wb" if ext.endswith("gz") else "wt"
+                with open(path + "." + ext, mode) as f:
                     f.write(out_str)
-            path = os.path.join(dir, "optgeo_options.txt")
 
-            # This writes the optgeo options in the individual target folders
-            with open(path, "w") as f:
-                for opts in ["local"]:
-                    f.write(v[opts])
+        if len(ret) > 0:
+            self.db.update(ret)
+
+    def generate_targets(self):
+        """
+        for each of the types, generate a target
+        """
+
+        pass
+
+    def parse_output(self):
+        """
+        take the results from a FB optimization, and gather the data for each
+        """
+        pass
+
+    def _generate_apply_kwargs(self, i, target, kwargs=None):
+
+        """
+        get the entry
+        really really want to try doing optgeo for everything
+        Lets go for it :) this means it will generate a target for every molecule in the opt
+        So we need make a target with a number id for each target xyz
+        but maybe we make a target folder for each so we can apply a specific weight (likely a energy weighted)
+
+        """
+
+        QCA = self.source.source
+
+        # # labels = self.source.db[target.payload]["data"]
+        tdr = QCA.db[target.payload]["data"]
+        entry = next(QCA.node_iter_to_root(target, select="Entry", dereference=True))
+
+        # out_str = ""
+
+        if kwargs is None:
+            kwargs = {}
+
+        """
+        need to go into an entry, grab all molecules
+        save coordinates and energy
+        """
+
+        smi = entry.attributes["canonical_isomeric_explicit_hydrogen_mapped_smiles"]
+
+        ref_mol = QCA.db["QCM-" + list(tdr.initial_molecule)[0]]["data"]
+        mol = offsb.rdutil.mol.rdmol_from_smiles_and_qcmol(smi, ref_mol)
+
+        map_idx = offsb.rdutil.mol.atom_map(mol)
+        map_inv = offsb.rdutil.mol.atom_map_invert(map_idx)
+
+        dir = "targets/" + target.payload
+
+        try:
+            os.mkdir(dir)
+        except FileExistsError:
+            pass
+
+        # This is a weird one: write the scan and the energy now, to avoid
+        # the unnecessary send to multiprocess
+        # This means half of the target is written now, half later (in unpack)
+        scan_fid = open(os.path.join(dir, "scan.xyz"), "w")
+        ene_fid = open(os.path.join(dir, "qdata.txt"), "w")
+
+        grid = []
+
+        for i, opt_node in enumerate(
+            QCA.node_iter_torsiondriverecord_minimum(target, select="Optimization")
+        ):
+
+            opt = QCA.db[opt_node.payload]["data"]
+            mol_node = list(QCA.node_iter_depth_first(opt_node, select="Molecule"))[0]
+
+            constraints = list(QCA.node_iter_to_root(opt_node, select="Constraint"))[
+                ::-1
+            ]
+            constraints = [x.payload[2] for x in constraints]
+            grid.append(constraints)
+
+            energies = opt.energies
+            energy = energies[-1]
+
+            qcmol = self.source.source.db.get(mol_node.payload).get("data")
+            offsb.qcarchive.qcmol_to_xyz(
+                qcmol, fd=scan_fid, atom_map={k: v - 1 for k, v in map_idx.items()}
+            )
+            ene_fid.write("ENERGY {:16.12f}\n".format(energy))
+
+        # Since the mol2 and pdb writers use canonical ordering, we need to unmap
+        # the QCA ordering
+
+        dihedrals = entry.td_keywords.dihedrals
+        for i, _ in enumerate(dihedrals):
+            dihedrals[i] = [map_inv[j] for j in dihedrals[i]]
+
+        metadata = {"dihedrals": dihedrals, "torsion_grid_ids": grid}
+
+        with open(os.path.join(dir, "metadata.json"), "w") as metadata_fid:
+            json.dump(metadata, metadata_fid)
+
+        scan_fid.close()
+        ene_fid.close()
+
+        if len(grid) == 0:
+            kwargs["error"] = "This torsiondrive empty! ID {:s}".format(target.payload)
+            shutil.rmtree(dir)
+
+        kwargs["smi"] = smi
+        kwargs["cwd"] = target.payload
+        kwargs["global"] = self.fb_main_opts
+        kwargs["mol"] = ref_mol
+        kwargs["metadata"] = metadata
+
+        return kwargs
+
+    def apply_single_target_objective():
+        pass
+
+    def apply_single(self, i, target, **kwargs):
+
+        if "error" in kwargs:
+            return {target.payload: kwargs["error"], "return": {}}
+
+        smi = kwargs["smi"]
+        qcmol = kwargs["mol"]
+        dir = kwargs["cwd"]
+        fb_main_opts = kwargs["global"]
+
+        obConversion = openbabel.OBConversion()
+        obConversion.SetInAndOutFormats("pdb", "sdf")
+        obmol = openbabel.OBMol()
+
+        mol = offsb.rdutil.mol.rdmol_from_smiles_and_qcmol(smi, qcmol)
+
+        # doesn't write connectivity... sigh
+        # sdf_str = StringIO()
+        # writer = Chem.SDWriter(sdf_str)
+        # writer.write(mol)
+        # sdf_str.seek(0)
+        # sdf_str = sdf_str.getvalue()
+
+        pdb_str = Chem.MolToPDBBlock(mol)
+        obConversion.ReadString(obmol, pdb_str)
+        sdf_str = obConversion.WriteString(obmol)
+
+        # ForceBalance does not detect compressed PDB (does an extension check for format)
+        # with BytesIO() as bio:
+        #     with gzip.GzipFile(fileobj=bio, mode='w') as fid:
+        #         fid.write(pdb_str.encode())
+        #     pdb_str = bio.getvalue()
+
+        with BytesIO() as bio:
+            with gzip.GzipFile(fileobj=bio, mode="w") as fid:
+                fid.write(sdf_str.encode())
+            sdf_str = bio.getvalue()
+
+        ret_obj = {
+            dir: {
+                "data": {
+                    "dir": dir,
+                    "pdb": pdb_str,
+                    "sdf.gz": sdf_str,
+                    "global": fb_main_opts.format(dir),
+                }
+            }
+        }
+        return {target.payload: "", "return": ret_obj}
+
+    def apply(
+        self,
+        targets=None,
+        parameterize_handlers=None,
+        fitting_targets=["geometry"],
+        parameterize_terms=None,
+        parameterize_spatial=True,
+        parameterize_force=True,
+    ):
+        if parameterize_handlers is None:
+            parameterize_handlers = self.parameterize_handlers
+
+        lvl = self.logger.getEffectiveLevel()
+        fb_logger = logging.getLogger("forcebalance")
+        fb_logger.setLevel(lvl)
+        off_ph_logger = logging.getLogger("openforcefield")
+        off_ph_logger.setLevel(lvl)
+        rdkit_logger = logging.getLogger("rdkit")
+        rdkit_logger.setLevel(lvl)
+
+        for folder in ["optimize.tmp", "optimize.bak", "result", "targets"]:
+            try:
+                shutil.rmtree(folder)
+            except FileNotFoundError:
+                pass
+
+        if "geometry" in fitting_targets:
+            self._optgeo = True
+        if "energy" in fitting_targets:
+            self._abinitio = True
+        os.mkdir("targets")
+
+        labeler = None
+
+        if parameterize_handlers is None:
+            parameterize_handlers = [
+                "vdW",
+                "Bonds",
+                "Angles",
+                "ProperTorsions",
+                "ImproperTorsions",
+            ]
+
+        ff_kwargs = dict(allow_cosmetic_attributes=True)
+        if len(parameterize_handlers) > 1:
+            labeler = offsb.op.openforcefield.OpenForceFieldTree(
+                self.source.source, "ff", self.ff_fname, ff_kwargs=ff_kwargs
+            )
+        elif len(parameterize_handlers) == 1:
+            if "vdW" in parameterize_handlers:
+                labeler = offsb.op.openforcefield.OpenForceFieldvdWTree(
+                    self.source.source, "ff", self.ff_fname, ff_kwargs=ff_kwargs
+                )
+            elif "Bonds" in parameterize_handlers:
+                labeler = offsb.op.openforcefield.OpenForceFieldBondTree(
+                    self.source.source, "ff", self.ff_fname, ff_kwargs=ff_kwargs
+                )
+            elif "Angles" in parameterize_handlers:
+                labeler = offsb.op.openforcefield.OpenForceFieldAngleTree(
+                    self.source.source, "ff", self.ff_fname, ff_kwargs=ff_kwargs
+                )
+            elif "ProperTorsions" in parameterize_handlers:
+                labeler = offsb.op.openforcefield.OpenForceFieldTorsionTree(
+                    self.source.source, "ff", self.ff_fname, ff_kwargs=ff_kwargs
+                )
+            elif "ImproperTorsions" in parameterize_handlers:
+                labeler = offsb.op.openforcefield.OpenForceFieldImproperTorsionTree(
+                    self.source.source, "ff", self.ff_fname, ff_kwargs=ff_kwargs
+                )
+            else:
+                raise Exception(
+                    "Parameter handler" + parameterize_handlers[0] + "not supported"
+                )
+
+        labeler.processes = 1
+        labeler.apply()
+
+        # export the FF
+        args = (self.prefix + ".offxml",)
+
+        # default case if we don't want any parameters fit, i.e. no "cosmetic attributes"
+        kwargs = dict(
+            parameterize_handlers=parameterize_handlers,
+            parameterize_spatial=parameterize_spatial,
+            parameterize_force=parameterize_force,
+            parameterize_terms=parameterize_terms,
+        )
+
+        # generate parameter fits to multiple handlers
+        if len(parameterize_handlers) >= 1:
+            kwargs.update(
+                dict(
+                    parameterize_spatial=parameterize_spatial,
+                    parameterize_force=parameterize_force,
+                )
+            )
+        if len(parameterize_handlers) == 1:
+            # we are operating on only one handler, so it doesn't take a list of handlers
+            kwargs.pop("parameterize_handlers")
+
+        labeler.export_ff(*args, **kwargs)
+        self.labeler = labeler
+        #
+
+        super().apply(self._select, targets=targets)
+
+        # write the main output config file
+        with open(self.fbinput_fname) as fin:
+            header = fin.readlines()
+            with open(self.prefix + ".in", "w") as fout:
+                _ = [fout.write(line) for line in header]
+                for tgt in self.db:
+                    opts = self.db[tgt]["data"].get("global")
+                    if opts is not None:
+                        fout.write(opts)
+
+
+class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
+
+    """
+    This class will iterate over the data and only
+    1. generate the appropriate target options for each during apply (should be automatic)
+    """
+
+    def __init__(
+        self,
+        fbinput_fname,
+        source_tree,
+        name,
+        ff_fname,
+        prefix="optimize",
+        verbose=True,
+    ):
+        super().__init__(source_tree, name)
+        import logging
+
+        if verbose:
+            self.logger.setLevel(logging.INFO)
+        else:
+            self.logger.setLevel(logging.ERROR)
+
+        self._select = "Entry"
+        self.prefix = prefix
+
+        self.global_opts, _ = parse_inputs(fbinput_fname)
+
+        self.fbinput_fname = fbinput_fname
+        self.ff_fname = ff_fname
+
+        self.parameterize_handlers = None
+
+        self.processes = 1
+
+        self._abinitio = False
+        self._optgeo = False
+
+        self.source = DummyTree
+        DummyTree.source = source_tree
+        self.fb_main_opts = (
+            "\n"
+            + "\n$target"
+            + "\nname {:s}"
+            + "\ntype OptGeoTarget_SMIRNOFF"
+            + "\nweight {:8.6f}"
+            + "\nwritelevel 0"
+            + "\nremote 1"
+            + "\n$end"
+        )
+
+        self.fb_tgt_opts = (
+            "\n"
+            + "\n$global"
+            + "\nbond_denom 0.02"
+            + "\nangle_denom 0.3"
+            + "\ndihedral_denom 10"
+            + "\nimproper_denom 10"
+            + "\n$end"
+            + "\n\n$system"
+            + "\nname {:s}"
+            + "\ngeometry mol.xyz"
+            + "\ntopology mol.pdb"
+            + "\nmol2 mol.mol2"
+            + "\n$end"
+        )
+        self.fb_main_opts_ai = (
+            "\n"
+            + "\n$target"
+            + "\nname {:s}"
+            + "\ntype AbInitio_SMIRNOFF"
+            + "\nweight {:8.6f}"
+            + "\nwritelevel 0"
+            + "\nremote 1"
+            + "\nforce true"
+            + "\nenergy true"
+            + "\nenergy_rms_override 1.0"
+            + "\nenergy_denom 1.0"
+            + "\ncoords mol.xyz"
+            + "\npdb mol.pdb"
+            + "\nmol2 mol.mol2"
+            + "\n$end"
+        )
+
+    def _apply_initialize(self, targets):
+        pass
+
+    def _apply_finalize(self, targets):
+        pass
+
+    def op(self, node, partition):
+        pass
+
+    def _unpack_result(self, ret):
+
+
+        for k, tgt in ret.items():
+            for target in [x for x,switch in zip(["geometry", "energy"], [self._optgeo, self._abinitio]) if switch]:
+                v = tgt["data"][target]
+                dir = os.path.join("targets", v["dir"])
+                try:
+                    os.mkdir(dir)
+                except FileExistsError:
+                    pass
+                path = os.path.join(dir, "mol")
+                for ext in ["pdb", "mol2", "xyz"]:
+                    out_str = v[ext]
+                    with open(path + "." + ext, "w") as f:
+                        f.write(out_str)
+                if v.get("local", None) is not None:
+                    path = os.path.join(dir, v["local_fnm"])
+
+                    # This writes the optgeo options in the individual target folders
+                    with open(path, "w") as f:
+                        for opts in ["local"]:
+                            f.write(v[opts])
 
         self.db.update(ret)
 
@@ -421,14 +913,40 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
                 enes.append(energy)
                 mol_ids.append(mol_node.payload)
                 cwd.append(opt_node.payload + "." + mol_node.payload)
+                grad_node = QCA[mol_node.parent]
+                if self._abinitio:
+                    dir = "targets/AI." + cwd[-1]
 
+                    try:
+                        os.mkdir(dir)
+                    except FileExistsError:
+                        pass
+                    fid = open(os.path.join(dir, "qdata.txt"), "w")
+                    fid.write("ENERGY {:16.12f}\n".format(energy))
+                    if not "Stub" in grad_node.name:
+                        gradient = QCA.db[grad_node.payload]["data"].return_result
+                        fid.write("GRADIENT")
+                        for g in offsb.tools.util.flatten_list(gradient):
+                            fid.write(" {:16.12f}".format(g))
+                        fid.write("\n")
+                    fid.close()
+
+        kwargs["geometry"] = self._optgeo
+        kwargs["energy"] = self._abinitio
         kwargs["smi"] = smi
         kwargs["mol"] = mols
         kwargs["mol_ids"] = mol_ids
         kwargs["ene"] = enes
+        kwargs["grads"] = enes
         kwargs["cwd"] = cwd
-        kwargs["global"] = self.fb_main_opts
-        kwargs["local"] = self.fb_tgt_opts
+        kwargs["global"] = {}
+        kwargs["local"] = {}
+        if self._optgeo:
+            kwargs["global"]["geometry"] = self.fb_main_opts
+            kwargs["local"]["geometry"] = self.fb_tgt_opts
+        if self._abinitio:
+            kwargs["global"]["energy"] = self.fb_main_opts_ai
+            kwargs["local"]["energy"] = None
         return kwargs
 
     def apply_single_target_objective():
@@ -464,30 +982,49 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
             obConversion.ReadString(obmol, pdb_str)
             mol2_str = obConversion.WriteString(obmol)
 
-            ret_obj[mol_id] = {
-                "data": {
-                    "dir": dir,
+            ret_obj[mol_id] = {"data": {}}
+            if kwargs["geometry"]:
+                ret_obj[mol_id]["data"]["geometry"] = {
+                    "dir": "OG." + dir,
                     "pdb": pdb_str,
                     "mol2": mol2_str,
                     "xyz": xyz_str,
                     "weight": weight,
-                    "global": fb_main_opts.format(dir, weight),
-                    "local": fb_tgt_opts.format(mol_id),
+                    "global": fb_main_opts["geometry"].format("OG." + dir, weight),
+                    "local": fb_tgt_opts["geometry"].format(mol_id),
+                    "local_fnm": "optgeo_options.txt",
                 }
-            }
+            if kwargs["energy"]:
+                ret_obj[mol_id]["data"]["energy"] = {
+                    "dir": "AI." + dir,
+                    "pdb": pdb_str,
+                    "mol2": mol2_str,
+                    "xyz": xyz_str,
+                    "weight": weight,
+                    "global": fb_main_opts["energy"].format("AI." + dir, weight),
+                }
 
         return {target.payload: "", "return": ret_obj}
 
     def apply(
-        self, targets=None, parameterize_handlers=None, fitting_targets=["geometry"]
+        self,
+        targets=None,
+        parameterize_handlers=None,
+        fitting_targets=["geometry"],
+        parameterize_terms=None,
+        parameterize_spatial=True,
+        parameterize_force=True,
     ):
+        if parameterize_handlers is None:
+            parameterize_handlers = self.parameterize_handlers
 
+        lvl = self.logger.getEffectiveLevel()
         fb_logger = logging.getLogger("forcebalance")
-        fb_logger.setLevel(logging.WARNING)
+        fb_logger.setLevel(lvl)
         off_ph_logger = logging.getLogger("openforcefield")
-        off_ph_logger.setLevel(logging.WARNING)
+        off_ph_logger.setLevel(lvl)
         rdkit_logger = logging.getLogger("rdkit")
-        rdkit_logger.setLevel(logging.ERROR)
+        rdkit_logger.setLevel(lvl)
 
         for folder in ["optimize.tmp", "optimize.bak", "result", "targets"]:
             try:
@@ -502,6 +1039,7 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
         os.mkdir("targets")
 
         labeler = None
+
         if parameterize_handlers is None:
             parameterize_handlers = [
                 "vdW",
@@ -511,30 +1049,31 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
                 "ImproperTorsions",
             ]
 
+        ff_kwargs = dict(allow_cosmetic_attributes=True)
         if len(parameterize_handlers) > 1:
             labeler = offsb.op.openforcefield.OpenForceFieldTree(
-                self.source.source, "ff", self.ff_fname
+                self.source.source, "ff", self.ff_fname, ff_kwargs=ff_kwargs
             )
         elif len(parameterize_handlers) == 1:
             if "vdW" in parameterize_handlers:
                 labeler = offsb.op.openforcefield.OpenForceFieldvdWTree(
-                    self.source.source, "ff", self.ff_fname
+                    self.source.source, "ff", self.ff_fname, ff_kwargs=ff_kwargs
                 )
             elif "Bonds" in parameterize_handlers:
                 labeler = offsb.op.openforcefield.OpenForceFieldBondTree(
-                    self.source.source, "ff", self.ff_fname
+                    self.source.source, "ff", self.ff_fname, ff_kwargs=ff_kwargs
                 )
             elif "Angles" in parameterize_handlers:
                 labeler = offsb.op.openforcefield.OpenForceFieldAngleTree(
-                    self.source.source, "ff", self.ff_fname
+                    self.source.source, "ff", self.ff_fname, ff_kwargs=ff_kwargs
                 )
             elif "ProperTorsions" in parameterize_handlers:
                 labeler = offsb.op.openforcefield.OpenForceFieldProperTorsionTree(
-                    self.source.source, "ff", self.ff_fname
+                    self.source.source, "ff", self.ff_fname, ff_kwargs=ff_kwargs
                 )
             elif "ImproperTorsions" in parameterize_handlers:
                 labeler = offsb.op.openforcefield.OpenForceFieldImproperTorsionTree(
-                    self.source.source, "ff", self.ff_fname
+                    self.source.source, "ff", self.ff_fname, ff_kwargs=ff_kwargs
                 )
             else:
                 raise Exception(
@@ -550,23 +1089,24 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
         # default case if we don't want any parameters fit, i.e. no "cosmetic attributes"
         kwargs = dict(
             parameterize_handlers=parameterize_handlers,
-            parameterize_spatial=False,
-            parameterize_force=False,
+            parameterize_spatial=parameterize_spatial,
+            parameterize_force=parameterize_force,
         )
 
         # generate parameter fits to multiple handlers
-        if len(parameterize_handlers) > 1:
+        if len(parameterize_handlers) >= 1:
             kwargs.update(
                 dict(
-                    parameterize_spatial=True,
-                    parameterize_force=True,
+                    parameterize_spatial=parameterize_spatial,
+                    parameterize_force=parameterize_force,
                 )
             )
-        elif len(parameterize_handlers) == 1:
+        if len(parameterize_handlers) == 1:
             # we are operating on only one handler, so it doesn't take a list of handlers
             kwargs.pop("parameterize_handlers")
 
         labeler.export_ff(*args, **kwargs)
+        self.labeler = labeler
         #
 
         super().apply(self._select, targets=targets)
@@ -577,9 +1117,10 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
             with open(self.prefix + ".in", "w") as fout:
                 _ = [fout.write(line) for line in header]
                 for tgt in self.db:
-                    opts = self.db[tgt]["data"].get("global")
-                    if opts is not None:
-                        fout.write(opts)
+                    for config in self.db[tgt]["data"].values():
+                        opts = config.get("global")
+                        if opts is not None:
+                            fout.write(opts)
 
 
 # Secret notes
