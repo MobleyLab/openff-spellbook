@@ -9,6 +9,7 @@ import offsb.rdutil.mol
 import offsb.treedi.node as Node
 import offsb.treedi.tree as Tree
 from rdkit import Chem
+import logging
 
 DEFAULT_DB = Tree.DEFAULT_DB
 
@@ -21,9 +22,13 @@ class SmilesSearchTree(Tree.PartitionTree):
     def __init__(self, smiles, source_tree, name, verbose=True):
         super().__init__(source_tree, name, verbose=verbose)
         self.smiles = smiles
-        if hasattr(smiles, "__iter__") and isinstance(smiles[0], str):
+        if hasattr(smiles, "__iter__") and (isinstance(smiles[0], str) and len(smiles[0]) == 1):
             self.smiles = [smiles]
         self.processes = 1
+        if verbose:
+            self.logger.setLevel(logging.INFO)
+        else:
+            self.logger.setLevel(logging.WARNING)
 
     def apply(self, targets=None):
         if targets is None:
