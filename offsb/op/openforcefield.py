@@ -5,6 +5,7 @@
 
 import abc
 import contextlib
+import copy
 import io
 import logging
 import os
@@ -15,10 +16,14 @@ import offsb.rdutil.mol
 import offsb.treedi
 import offsb.treedi.tree
 import openforcefield.typing.engines.smirnoff as OFF
-from openforcefield.topology import Molecule
 from offsb.search.smiles import SmilesSearchTree
 from offsb.tools.util import flatten_list
 from offsb.treedi.tree import DEFAULT_DB, PartitionTree
+from openforcefield.topology import Molecule
+
+
+class NotImplementedError:
+    pass
 
 
 class _DummyTree:
@@ -26,11 +31,14 @@ class _DummyTree:
 
 
 class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
-    def __init__(self, source_tree, name, filename=None):
+    def __init__(self, source_tree, name, filename=None, ff_kwargs=None):
         super().__init__(source_tree, name)
 
         # This tree operates on entries
         self._select = "Entry"
+
+        if ff_kwargs is None:
+            ff_kwargs = {}
 
         if filename is not None:
 
@@ -51,7 +59,7 @@ class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
                 else:
                     pth = entry_point.load()()[0]
                 abspth = os.path.join(pth, filename)
-                self.logger.info("Searching + {}".format(abspth))
+                self.logger.info("Searching {}".format(abspth))
                 if os.path.exists(abspth):
                     self.abs_path = abspth
                     self.logger.info("Found {}".format(abspth))
@@ -59,8 +67,9 @@ class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
                     break
             if not found:
                 raise Exception("Forcefield could not be found")
+            print("loading", self.abs_path)
             self.forcefield = OFF.ForceField(
-                self.abs_path, disable_version_check=True
+                self.abs_path, disable_version_check=True, **ff_kwargs
             )
             logger.setLevel(level=level)
 
@@ -85,9 +94,7 @@ class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
     def associate(self, source):
         super().associate(source)
         if self.forcefield is None:
-            self.forcefield = OFF.ForceField(
-                self.abs_path, disable_version_check=True
-            )
+            self.forcefield = OFF.ForceField(self.abs_path, disable_version_check=True)
 
     def count_oFF_labels(self, node):
         """
@@ -115,7 +122,9 @@ class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
             elif "initial_molecules" in entry.dict():
                 qcid = entry.dict()["initial_molecules"]
             else:
-                out_str += "{:d} initial mol was empty: {:s}".format(i, str(qcid))
+                out_str += "{:d} initial mol was empty for this record: {:s}; target {:s}".format(
+                    i, str(qcid), target.payload
+                )
                 return {"error": out_str}
 
             if isinstance(qcid, set):
@@ -126,13 +135,19 @@ class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
             qcmolid = "QCM-" + qcid
 
             if qcmolid not in self.source.source.db:
-                out_str += "{:d} initial mol was empty: {:s}".format(i, str(qcmolid))
+                out_str += "{:d} initial mol was not cached: {:s}; target {:s}".format(
+                    i, str(qcmolid), target.payload
+                )
                 return {"error": out_str}
 
             if "data" in self.source.source.db.get(qcmolid):
                 qcmol = self.source.source.db.get(qcmolid).get("data")
             else:
-                out_str += "{:d} initial mol was empty: {:s}".format(i, str(qcmolid))
+                out_str += (
+                    "{:d} initial mol was cached correctly: {:s}; target {:s}".format(
+                        i, str(qcmolid), target.payload
+                    )
+                )
                 return {"error": out_str}
 
             kwargs["smi"] = smi
@@ -168,13 +183,24 @@ class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
         if self.source.root().payload not in self.db:
             self.db[self.source.root().payload] = {}
 
-        self.db[self.source.root().payload]["data"].update(ret[2])
+        root = self.source.root()
+        for k, v in ret[2].items():
+            if k not in self.db[root.payload]["data"]:
+                self.db[root.payload]["data"][k] = DEFAULT_DB()
+            self.db[root.payload]["data"][k].update(v)
 
     def apply_single(self, i, target, **kwargs):
 
         out_str = ""
         all_labels = {}
         out_dict = {}
+
+        if "error" in kwargs:
+            return {
+                target.payload: kwargs["error"],
+                "return": [target.payload, out_dict, all_labels],
+            }
+
         smi = kwargs["smi"]
         # qcmol = kwargs['qcmol']
         # mol = kwargs.get('mol')
@@ -189,16 +215,14 @@ class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
                     with contextlib.redirect_stderr(f):
                         # mmol = oFF.topology.Molecule.from_rdkit(mol,
                         #         allow_undefined_stereo=True)
-                        mmol = Molecule.from_smiles(
-                            smi, allow_undefined_stereo=True
-                        )
+                        mmol = Molecule.from_smiles(smi, allow_undefined_stereo=True)
                     for line in f:
                         if "not error because allow_undefined_stereo" not in line:
                             print(line)
 
             # just skip molecules that oFF can't handle for whatever reason
             try:
-                top = oFF.topology.Topology.from_molecules(mmol)
+                top = mmol.to_topology()
             except AssertionError as e:
                 out_str += "FAILED TO BUILD OFF MOL:\n"
                 out_str += str(e)
@@ -249,7 +273,6 @@ class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
             # map them now since we work in the mapped CMILES in QCA
             val = params.get(atoms)
 
-
             # since we are only applying labels to the underlying partition
             # skip any labels that were produced that are extraneous
             # But, in the end, allow it to just work if no mask is present
@@ -281,78 +304,224 @@ class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
     def apply(self, targets=None):
         super().apply(self._select, targets=targets)
 
+    def enable_forcebalance_fitting(self, spatial=False, force=False, terms=None):
+
+        name = self._key
+        ph = self.forcefield.get_parameter_handler(name)
+
+        # we store parameters as {id: param}
+        found_parameters = self.db["ROOT"]["data"][name]
+
+        if terms is not None:
+            found_parameters = [x for x in found_parameters if x in terms]
+
+        if len(found_parameters) == 0:
+            return
+
+        for existing_parameter in ph.parameters:
+            if existing_parameter.id in found_parameters:
+                parameterize = self._enable_forcebalance_fitting_parameter_str(
+                    existing_parameter, spatial=spatial, force=force
+                )
+                existing_parameter.add_cosmetic_attribute("parameterize", parameterize)
+
+    @abc.abstractmethod
+    def _enable_forcebalance_fitting_parameter_str(self, parameter, spatial, force):
+        pass
+
+    def export_ff(
+        self,
+        ff_fname,
+        parameterize_spatial=False,
+        parameterize_force=False,
+        parameterize_terms=None,
+    ):
+        """
+        save the FF to the filesystem, optionally adding flags to parameterize the terms
+        """
+
+        ff = copy.deepcopy(self.forcefield)
+
+        # if no parameterization, skip since an empty attr in the XML can cause crashes
+        if parameterize_spatial or parameterize_force:
+            self.enable_forcebalance_fitting(
+                spatial=parameterize_spatial,
+                force=parameterize_force,
+                terms=parameterize_terms,
+            )
+
+        self.forcefield.to_file(ff_fname)
+        self.forcefield = ff
+
 
 class OpenForceFieldvdWTree(OpenForceFieldTreeBase):
-    def __init__(self, source_tree, name, filename=None):
+    def __init__(self, source_tree, name, filename=None, ff_kwargs=None):
 
         self._key = "vdW"
         self._unique_members = ["rmin_half", "epsilon"]
 
         if not issubclass(type(source_tree), PartitionTree):
-            partition = SmilesSearchTree("[*]", source_tree, self._key)
+            partition = SmilesSearchTree("[*]", source_tree, self._key, verbose=False)
             partition.apply()
             source_tree = partition
 
-        super().__init__(source_tree, name, filename)
+        super().__init__(source_tree, name, filename, ff_kwargs=ff_kwargs)
+
+    def _enable_forcebalance_fitting_parameter_str(
+        self, parameter, spatial=False, force=False
+    ):
+
+        parameterize_str_lst = []
+        if spatial:
+            term = "rmin_half"
+            term = term if hasattr(parameter, term) else "sigma"
+            assert hasattr(parameter, term)
+            parameterize_str_lst.append(term)
+        if force:
+            parameterize_str_lst.append("epsilon")
+        parameterize = ",".join(parameterize_str_lst)
+
+        return parameterize
 
 
 class OpenForceFieldBondTree(OpenForceFieldTreeBase):
-    def __init__(self, source_tree, name, filename=None):
+    def __init__(self, source_tree, name, filename=None, ff_kwargs=None):
 
         self._key = "Bonds"
         self._unique_members = ["k", "length"]
 
         if not issubclass(type(source_tree), PartitionTree):
-            partition = SmilesSearchTree("[*]~[*]", source_tree, self._key)
+            partition = SmilesSearchTree("[*]~[*]", source_tree, self._key, verbose=False)
             partition.apply()
             source_tree = partition
 
-        super().__init__(source_tree, name, filename)
+        super().__init__(source_tree, name, filename, ff_kwargs=ff_kwargs)
+
+    def parameterize_type(self, parameter, spatial=False, force=False):
+        pass
+
+    def _enable_forcebalance_fitting_parameter_str(
+        self, parameter, spatial=False, force=False
+    ):
+
+        parameterize_str_lst = []
+        if spatial:
+            parameterize_str_lst.append("length")
+        if force:
+            parameterize_str_lst.append("k")
+        parameterize = ",".join(parameterize_str_lst)
+
+        return parameterize
 
 
 class OpenForceFieldAngleTree(OpenForceFieldTreeBase):
-    def __init__(self, source_tree, name, filename=None):
+    def __init__(self, source_tree, name, filename=None, ff_kwargs=None):
 
         self._key = "Angles"
         self._unique_members = ["k", "angle"]
 
         if not issubclass(type(source_tree), PartitionTree):
-            partition = SmilesSearchTree("[*]~[*]~[*]", source_tree, self._key)
+            partition = SmilesSearchTree("[*]~[*]~[*]", source_tree, self._key, verbose=False)
             source_tree = partition
             partition.apply()
 
-        super().__init__(source_tree, name, filename)
+        super().__init__(source_tree, name, filename, ff_kwargs=ff_kwargs)
+
+    def _enable_forcebalance_fitting_parameter_str(
+        self, parameter, spatial=False, force=False
+    ):
+
+        parameterize_str_lst = []
+        if spatial:
+            parameterize_str_lst.append("angle")
+        if force:
+            parameterize_str_lst.append("k")
+        parameterize = ",".join(parameterize_str_lst)
+
+        return parameterize
 
 
 class OpenForceFieldTorsionTree(OpenForceFieldTreeBase):
-    def __init__(self, source_tree, name, filename=None):
+    def __init__(self, source_tree, name, filename=None, ff_kwargs=None):
 
         self._key = "ProperTorsions"
         self._unique_members = ["k", "periodicity", "phase"]
 
         if not issubclass(type(source_tree), PartitionTree):
-            partition = SmilesSearchTree("[*]~[*]~[*]~[*]", source_tree, self._key)
+            partition = SmilesSearchTree("[*]~[*]~[*]~[*]", source_tree, self._key, verbose=False)
             partition.apply()
             source_tree = partition
 
-        super().__init__(source_tree, name, filename)
+        super().__init__(source_tree, name, filename, ff_kwargs=ff_kwargs)
+
+    def _enable_forcebalance_fitting_parameter_str(
+        self, parameter, spatial=False, force=False
+    ):
+
+        n_terms = list(range(1, len(parameter.phase) + 1))
+        parameterize_str_lst = []
+
+        is_interpolated = False
+        if hasattr(parameter, "k_bondorder"):
+            is_interpolated = parameter.k_bondorder is not None
+
+        if spatial:
+            parameterize_str_lst.append(",".join(["phase" + str(i) for i in n_terms]))
+        if force:
+            if is_interpolated:
+                for i in n_terms:
+                    for j in parameter.k_bondorder[i - 1]:
+                        term = "k" + str(i) + "_bondorder" + str(j)
+                        parameterize_str_lst.append(term)
+            else:
+                parameterize_str_lst.append(",".join(["k" + str(i) for i in n_terms]))
+
+        parameterize = ",".join(parameterize_str_lst)
+
+        return parameterize
 
 
 class OpenForceFieldImproperTorsionTree(OpenForceFieldTreeBase):
-    def __init__(self, source_tree, name, filename=None):
+    def __init__(self, source_tree, name, filename=None, ff_kwargs=None):
 
         self._key = "ImproperTorsions"
         self._unique_members = ["k", "periodicity", "phase"]
 
         if not issubclass(type(source_tree), PartitionTree):
-            partition = SmilesSearchTree("[*]~[*](~[*])~[*]", source_tree, self._key)
+            partition = SmilesSearchTree("[*]~[*](~[*])~[*]", source_tree, self._key, verbose=False)
             partition.apply()
             source_tree = partition
 
-        super().__init__(source_tree, name, filename)
+        super().__init__(source_tree, name, filename, ff_kwargs=ff_kwargs)
 
     def parse_labels(self):
         pass
+
+    def _enable_forcebalance_fitting_parameter_str(
+        self, parameter, spatial=False, force=False
+    ):
+
+        n_terms = list(range(1, len(parameter.phase) + 1))
+        parameterize_str_lst = []
+
+        is_interpolated = False
+        if hasattr(parameter, "k_bondorder"):
+            is_interpolated = parameter.k_bondorder is not None
+
+        if spatial:
+            parameterize_str_lst.append(",".join(["phase" + str(i) for i in n_terms]))
+        if force:
+            if is_interpolated:
+                for i in n_terms:
+                    for j in parameter.k_bondorder[i - 1]:
+                        term = "k" + str(i) + "_bondorder" + str(j)
+                        parameterize_str_lst.append(term)
+            else:
+                parameterize_str_lst.append(",".join(["k" + str(i) for i in n_terms]))
+
+        parameterize = ",".join(parameterize_str_lst)
+
+        return parameterize
 
 
 class OpenForceFieldTree(OpenForceFieldTreeBase):
@@ -363,8 +532,8 @@ class OpenForceFieldTree(OpenForceFieldTreeBase):
     5 operations
     """
 
-    def __init__(self, source_tree, name, filename):
-        super().__init__(source_tree, name, filename=filename)
+    def __init__(self, source_tree, name, filename, ff_kwargs=None):
+        super().__init__(source_tree, name, filename=filename, ff_kwargs=ff_kwargs)
 
         self._fields = ["_vdw", "_bonds", "_angles", "_outofplane", "_dihedral"]
         types = [
@@ -516,7 +685,6 @@ class OpenForceFieldTree(OpenForceFieldTreeBase):
 
             ret = term.apply_single(i, target, **subkwargs)
 
-
             # append the output string
             out_str += ret[target.payload]
 
@@ -546,3 +714,42 @@ class OpenForceFieldTree(OpenForceFieldTreeBase):
         offsb.treedi.tree.LOG = True
         super().apply(targets=targets)
 
+    def _enable_forcebalance_fitting_parameter_str(self, parameter, spatial, force):
+        raise NotImplementedError
+
+    def export_ff(
+        self,
+        ff_fname,
+        parameterize_handlers=None,
+        parameterize_spatial=False,
+        parameterize_force=False,
+        parameterize_terms=None,
+    ):
+        """
+        save the FF to the filesystem, optionally adding flags to parameterize the terms
+        """
+
+        ff = copy.deepcopy(self.forcefield)
+
+        for ph_field in self._fields:
+            ph = getattr(self, ph_field)
+
+            if not (
+                parameterize_handlers is not None and ph._key in parameterize_handlers
+            ):
+                continue
+
+            db = ph.db
+            ph.db = self.db
+
+            ph.enable_forcebalance_fitting(
+                spatial=parameterize_spatial,
+                force=parameterize_force,
+                terms=parameterize_terms,
+            )
+
+            ph.db = db
+            ph.forcefield = ff
+
+        self.forcefield.to_file(ff_fname)
+        self.forcefield = ff
