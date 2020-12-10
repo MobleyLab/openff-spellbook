@@ -3,6 +3,7 @@ import offsb.treedi
 import offsb.treedi.tree
 import offsb.op.geometry
 import re
+from chemper.smirksify import SMIRKSifier
 
 
 class ChemperOperation(offsb.treedi.tree.TreeOperation):
@@ -30,7 +31,9 @@ class ChemperOperation(offsb.treedi.tree.TreeOperation):
     def __init__(self, source, name):
         super().__init__(source, name)
         self._select = "Entry"
-        print("My db is", self.db)
+        # for some reason, multiprocess doesn't work... it mixes the entries and
+        # data, so it becomes out of sync
+        self.processes = 1
 
     @staticmethod
     def _smirks_splitter(smirks, atoms=2):
@@ -98,7 +101,7 @@ class ChemperOperation(offsb.treedi.tree.TreeOperation):
         return kwargs
 
     @staticmethod
-    def apply_single(i, target, kwargs):
+    def apply_single(i, target, **kwargs):
         """
         From an entry, builds the initial molecule (for e.g. stereochemistry)
         i : int
@@ -114,24 +117,31 @@ class ChemperOperation(offsb.treedi.tree.TreeOperation):
             }
 
         mol = kwargs["mol"]
-        masks = kwargs["masks"]
+        all_masks = kwargs["masks"]
 
         # mol = Mol(mol)
         # values will be 1-index
-        map_idx = {a.GetIdx(): a.GetAtomMapNum() for a in mol.GetAtoms()}
+        # map_idx = {a.GetIdx(): a.GetAtomMapNum() for a in mol.GetAtoms()}
 
         # chemper uses 0-indexing
-        map_inv = {v - 1: k for k, v in map_idx.items()}
+        # map_inv = {v - 1: k for k, v in map_idx.items()}
         chemper = {}
-        for mask in map(tuple, masks):
-            mapped_bond = tuple([map_inv[i] for i in mask])
-            pat = ("name", [[mapped_bond]])
-            # with open("/dev/null", "w") as f:
-            #     with contextlib.redirect_stdout(f):
-            fier = SMIRKSifier([mol], [pat], verbose=False, max_layers=3)
-            chemper[mask] = ChemperOperation._smirks_splitter(
-                fier.current_smirks[0][1], len(mask)
-            )
+        for query, masks in all_masks.items():
+            for mask in map(tuple, masks):
+                # mapped_bond = tuple([map_inv[i] for i in mask])
+                # pat = ("name", [[mapped_bond]])
+                pat = ("name", [[mask]])
+                # with open("/dev/null", "w") as f:
+                #     with contextlib.redirect_stdout(f):
+
+                # If this fails, likely the indices were messed up
+                try:
+                    fier = SMIRKSifier([mol], [pat], verbose=False, max_layers=1)
+                    chemper[mask] = ChemperOperation._smirks_splitter(
+                        fier.current_smirks[0][1], len(mask)
+                    )
+                except Exception:
+                    breakpoint()
 
         return {target.payload: None, "return": {target.payload: {"data": chemper}}}
 
