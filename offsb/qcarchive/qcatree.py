@@ -308,31 +308,35 @@ class QCATree(Tree.Tree):
             else:
                 self.db[key]["data"] = val
 
-    def _initial_molecules_ids(self):
+    def _initial_molecules_ids(self, select="Entry", limit=None):
         mols = dict()
-        for entry in self.iter_entry():
+
+        if limit is not None:
+            limit = int(limit)
+
+        for entry in self.node_iter_depth_first(self.root(), select=select):
             eobj = self.db[entry.payload]["data"].__dict__
             if "initial_molecule" in eobj:
                 init_mol_id = eobj["initial_molecule"]
             elif "initial_molecules" in eobj:
                 init_mol_id = list(eobj["initial_molecules"])
 
-            if isinstance(init_mol_id, list):
-                init_mol_id = init_mol_id[0]
+                if limit is not None and isinstance(init_mol_id, list):
+                    init_mol_id = init_mol_id[:limit]
 
-            init_mol_id = "QCM-" + str(init_mol_id)
+            init_mol_id = ["QCM-" + str(x) for x in init_mol_id]
             mols[entry.index] = init_mol_id
+        return mols
 
-    def cache_initial_molecules(self):
+    def cache_initial_molecules(self, select="Entry", limit=None):
         """
         Visit the entries and download the initial molecules of each procedure
         """
 
-        mols = self._initial_molecules_ids()
+        mols = self._initial_molecules_ids(select=select, limit=limit)
 
         if len(mols) == 0:
-            print("No initial molecules found!")
-            return
+            return 0
 
         mol_ids_flat = flatten_list([x for x in mols.values()], -1)
 
@@ -344,6 +348,8 @@ class QCATree(Tree.Tree):
                 self.db[key] = DEFAULT_DB({"data": val})
             else:
                 self.db[key]["data"] = val
+
+        return len(fresh_obj_map)
 
     def _cache_minimum(self, nodes, stubname, fullname, query_fn, iter_fn=None):
         if not hasattr(nodes, "__iter__"):
@@ -442,6 +448,13 @@ class QCATree(Tree.Tree):
             nodes = [self.root()]
         fn = __class__.node_iter_optimization_minimum
         return self.cache_minimum_molecules(nodes, fn)
+
+    def cache_optimization_minimum_gradients(self, nodes=None):
+
+        if nodes is None:
+            nodes = [self.root()]
+        fn = __class__.node_iter_optimization_minimum
+        return self.cache_minimum_gradients(nodes, fn)
 
     def batch_download_hessian_parallel(
         self, full_ids, fn, max_query=1000, projection=None
@@ -777,23 +790,38 @@ class QCATree(Tree.Tree):
         # [suf + str(entry.object_map[spec])
         #    for entry in records.values() if spec in entry.object_map]
         ids = flatten_list(list(spec_map_ids.values()), times=-1)
-        print("Downloading", name, "information for", len(ids))
+
+        n_ids = len(ids)
+        filtered_ids = [i for i in ids if i.split('-')[1] in self.drop]
+        ids = [i for i in ids if i.split('-')[1] not in self.drop]
+        n_filtered = n_ids - len(ids)
+
+        print("Downloading", name, "information for", len(ids), end=" ")
+        if n_filtered > 0:
+            print("(filtered {:d})".format(n_filtered))
+            for i in filtered_ids:
+                print("Filtered {}".format(i))
+        else:
+            print()
 
         # returns an inverse map, where the values are keys to the dl data
         obj_map = self.batch_download(ids, client.query_procedures)
 
         # retreive all of the initial molecule IDs
         # init_mol_ids = [obj.initial_molecule for obj in obj_map.values()]
-        init_mol_ids = [obj.initial_molecule for obj in obj_map.values()]
-        init_mols_are_lists = False
-        if isinstance(init_mol_ids[0], list):
-            init_mols_are_lists = True
-            # init_mol_ids = [ str(x[0]) for x in init_mol_ids]
-            init_mol_ids = flatten_list(init_mol_ids)
-        init_mol_ids = ["QCM-" + x for x in init_mol_ids]
+        init_mol_map = None
 
-        print("Downloading", name, "initial molecules for  for", len(init_mol_ids))
-        init_mol_map = self.batch_download(init_mol_ids, client.query_molecules)
+        if "Molecule" not in self.drop or "Initial" not in self.drop:
+            init_mol_ids = [obj.initial_molecule for obj in obj_map.values()]
+            init_mols_are_lists = False
+            if isinstance(init_mol_ids[0], list):
+                init_mols_are_lists = True
+                # init_mol_ids = [ str(x[0]) for x in init_mol_ids]
+                init_mol_ids = flatten_list(init_mol_ids)
+            init_mol_ids = ["QCM-" + x for x in init_mol_ids]
+
+            print("Downloading", name, "initial molecules, count=", len(init_mol_ids))
+            init_mol_map = self.batch_download(init_mol_ids, client.query_molecules)
 
         # add this entry node
         nodes = []
@@ -802,7 +830,7 @@ class QCATree(Tree.Tree):
             record = records[rec]
             # add ds.data.id to ensure that entries are unique across dict
             # TODO this should probably have server/db info as well
-            # since two mirror servers could have same ids but different data
+            # since two servers could have same ids but different data
 
             pl_name = "QCE." + ds.data.id + "-" + str(rec)
             if pl_name in self.db:
@@ -835,6 +863,11 @@ class QCATree(Tree.Tree):
 
                 proc = "QCP-" + record.object_map[spec]
                 pl_name = proc
+
+                # Possibly missing if filtered from above
+                obj = obj_map.get(proc)
+                if obj is None:
+                    continue
                 pload = DEFAULT_DB({"data": obj_map[proc]})
                 proc_node = Node.Node(name=name, payload=pl_name)
                 proc_node = self.add(spec_node.index, proc_node)
@@ -843,25 +876,47 @@ class QCATree(Tree.Tree):
                 # expand these nodes below
                 nodes.append(proc_node)
 
-                # perhaps inefficient, but add init mols as we travel
-                # the data, rather than all at once
-                # should help with debugging
-                molid = pload["data"].initial_molecule
-                # molid = pload["data"].initial_molecule
-                if init_mols_are_lists:
-                    for molid_i in molid:
-                        molid_i = "QCM-" + molid_i
-                        mol_obj = init_mol_map[molid_i]
-                        self.db[molid_i] = DEFAULT_DB({"data": mol_obj})
-                else:
-                    molid = "QCM-" + molid
-                    mol_obj = init_mol_map[molid]
-                    self.db[molid] = DEFAULT_DB({"data": mol_obj})
+                if init_mol_map is not None:
+                    # perhaps inefficient, but add init mols as we travel
+                    # the data, rather than all at once
+                    # should help with debugging
+                    molid = pload["data"].initial_molecule
+                    # molid = pload["data"].initial_molecule
+                    if init_mols_are_lists:
+                        for molid_i in molid:
+                            molid_i = "QCM-" + molid_i
+                            mol_obj = init_mol_map[molid_i]
+                            self.db[molid_i] = DEFAULT_DB({"data": mol_obj})
+                    else:
+                        molid = "QCM-" + molid
+                        mol_obj = init_mol_map[molid]
+                        self.db[molid] = DEFAULT_DB({"data": mol_obj})
 
         print()
 
         # descend into the next type of nodes
         fn([node.index for node in nodes], skel=skel)
+
+    def find_ids(self, ids, nodes=None, dereference=None):
+        if dereference is None:
+            dereference = self.dereference
+
+
+        if nodes is None:
+            nodes = self.root()
+
+        if type(ids) == str:
+            ids = [ids]
+
+        ret = []
+        for node in self.node_iter_depth_first(nodes, dereference=False):
+            for i in ids:
+                if i in node.payload:
+                    ret.append(node)
+        if dereference:
+            ret = [self.db[x.payload]['data'] for x in ret]
+
+        return ret
 
     def branch_torsiondrive_ds(self, node, skel=False, **kwargs):
         """ Generate the individual torsiondrives """
@@ -886,6 +941,8 @@ class QCATree(Tree.Tree):
         if "GridOpt" in self.drop:
             return
 
+        client = self.db["ROOT"]["data"]
+
         if not hasattr(nids, "__iter__"):
             nids = [nids]
         nodes = [self.node_index.get(nid) for nid in nids]
@@ -893,11 +950,24 @@ class QCATree(Tree.Tree):
             list(self.db[node.payload]["data"].grid_optimizations.values())
             for node in nodes
         ]
-        client = self.db["ROOT"]["data"]
+        ids = flatten_list(opt_ids, times=-1)
+        n_ids = len(ids)
+
+        filtered_ids = [i for i in ids if i.split('-')[1] in self.drop]
+        ids = [i for i in ids if i.split('-')[1] not in self.drop]
+
+        n_filtered = n_ids - len(ids)
+
         print(
             "Downloading optimization information for",
-            len(flatten_list(opt_ids, times=-1)),
+            len(ids), end=" "
         )
+        if n_filtered > 0:
+            print("(filtered {:d})".format(n_filtered))
+            for i in filtered_ids:
+                print("Filtered {}".format(i))
+        else:
+            print()
 
         # projection = { 'optimization_history': True } if skel else None
         projection = None
@@ -932,16 +1002,23 @@ class QCATree(Tree.Tree):
                 else:
                     step = scan.get("steps")[val[0]]
                     # step = scan.steps[val[0]]
+
+                index = "QCP-" + opts
+
+                # skip if filtered from above
+                obj = opt_map.get(index)
+                if obj is None:
+                    continue
+
                 pl = (scan.get("type")[:], tuple(scan.get("indices")), step)
                 # pl = (scan.type[:], tuple(scan.indices), step)
                 constraint_node = Node.Node(payload=pl, name="Constraint")
                 constraint_node = self.add(node.index, constraint_node)
 
-                index = "QCP-" + opts
                 opt_node = Node.Node(name="Optimization", payload=index)
                 opt_nodes.append(opt_node)
                 opt_node = self.add(constraint_node.index, opt_node)
-                self.db[index] = DEFAULT_DB({"data": opt_map[index]})
+                self.db[index] = DEFAULT_DB({"data": obj})
         print()
 
         self.branch_optimization_record([x.index for x in opt_nodes], skel=skel)
@@ -974,7 +1051,20 @@ class QCATree(Tree.Tree):
         if len(flat_ids) == 0:
             print("No optimizations to download?!?")
             return
-        print("Downloading optimization information for", len(flat_ids))
+
+        ids = flat_ids
+        n_ids = len(ids)
+        filtered_ids = [i for i in ids if i in self.drop]
+        ids = [i for i in ids if i not in self.drop]
+        n_filtered = n_ids - len(ids)
+
+        print("Downloading optimization information for", len(ids))
+        if n_filtered > 0:
+            print("(filtered {:d})".format(n_filtered))
+            for i in filtered_ids:
+                print("Filtered {}".format(i))
+        else:
+            print()
 
         projection = None
         flat_ids = ["QCP-" + str(x) for x in flat_ids]
@@ -1004,6 +1094,12 @@ class QCATree(Tree.Tree):
 
                 for index in opts:
                     index = "QCP-" + index
+
+                    # skip if filtered from above
+                    obj = opt_map.get(index)
+                    if obj is None:
+                        self.logger.warn("A TD optimization was filtered! ID {}".format(index))
+                        continue
                     opt_node = Node.Node(name="Optimization", payload=index)
                     opt_nodes.append(opt_node)
                     opt_node = self.add(constraint_node.index, opt_node)
@@ -1284,12 +1380,7 @@ class QCATree(Tree.Tree):
                 if len(opt_node.children) > 0:
                     # bit ugly, but it is taking the last gradient record, and
                     # the first (and only) molecule from it
-                    n = self[self[opt_node.children[-1]].children[0]]
-                    if select:
-                        if select == n.name:
-                            yield n
-                    else:
-                        yield n
+                    yield from fn(self, self[opt_node.children[-1]], select=select, dereference=dereference)
 
     def node_iter_contraints(self, nodes, fn=Tree.Tree.node_iter_depth_first):
         yield from fn(self, nodes, select="Constraint")
@@ -1357,7 +1448,7 @@ class QCATree(Tree.Tree):
                 for opt_nid in constraint_node.children:
                     opt_node = self[opt_nid]
                     if min_ene_id == opt_node.payload:
-                        yield from fn(self, self[opt_node.children[-1]], select)
+                        yield from fn(self, opt_node, select)
                         break
 
     def _yield_match_td_smarts(self, targets, smitree, indices):
