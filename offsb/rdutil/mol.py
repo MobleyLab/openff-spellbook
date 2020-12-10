@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import rdkit.Chem.Draw
 from rdkit import Chem
 from rdkit import Geometry as RDGeom
 from rdkit.Chem import AllChem, FragmentMatcher
@@ -16,7 +17,7 @@ def atom_map(mol):
 
 
 def atom_map_invert(map_idx):
-    inv = [(map_idx[i] - 1) for i in range(len(map_idx))]
+    inv = {v - 1: k for k,v in map_idx.items()}
     return inv
 
 
@@ -61,3 +62,36 @@ def rdmol_from_smiles_and_qcmol(smiles_pattern, qcmol):
     Chem.rdmolops.AssignAtomChiralTagsFromStructure(mol, id, replaceExistingTags=True)
 
     return mol
+
+def save2d(rdmol, fname=None, indices=False, rdkwargs=None, rdoption_properties=None):
+    AllChem.Compute2DCoords(rdmol)
+    # rdkit.Chem.Draw.PrepareMolForDrawing(rdmol)
+    options = rdkit.Chem.Draw.MolDrawOptions()
+    if indices:
+        options.addAtomIndices = True
+        # get the map; if there is one, use it, otherwise make one
+        mapnum = [m.GetAtomMapNum() for m in rdmol.GetAtoms()]
+        if not all(mapnum):
+            for atom in rdmol.GetAtoms():
+                atom.SetAtomMapNum(atom.GetIdx()+1)
+    if rdkwargs is None:
+        rdkwargs = {}
+    size = rdkwargs.pop("size", (500, 500))
+
+    # if rdoption_properties is not None:
+    #     [setattr(options, k, v) for k,v in rdoption_properties.items()]
+
+    # options.fixedBondLength = 20.0
+    options.explictMethyl = True
+    options.fixedScale = .1
+    options.flagCloseContactsDist = 3
+    image = rdkit.Chem.Draw.MolToImage(
+        rdmol,
+        size=size,
+        drawingOptions=options,
+        **rdkwargs
+    )
+    if fname is None:
+        return image
+    else:
+        image.save(fname)
