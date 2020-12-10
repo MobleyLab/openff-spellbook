@@ -2,12 +2,14 @@ import json
 import os
 import pickle
 import sys
+import traceback
 
 import numpy as np
 
 import offsb
-import offsb.rdutil
 import offsb.qcarchive.qcatree as qca
+import offsb.rdutil
+import openforcefield.typing.engines.smirnoff.forcefield
 import qcfractal.interface as ptl
 import simtk.unit
 from openmmtools.utils import quantity_from_string
@@ -48,7 +50,7 @@ class QCArchiveSpellBook:
         tree.to_pickle(db=True, name=name)
         print("{:12.1f} MB".format(os.path.getsize(name) / 1024 ** 2))
 
-    def load(self, sets, load_all=False):
+    def load(self, sets, load_all=False, start=0, limit=0):
 
         # client = ptl.FractalClient("localhost:7777", verify=False)
         client = ptl.FractalClient()
@@ -58,6 +60,8 @@ class QCArchiveSpellBook:
             )
         newdata = False
 
+        if self.drop is None:
+            self.drop = []
         # print("Aux sets to load:")
         # print(sets)
 
@@ -71,7 +75,6 @@ class QCArchiveSpellBook:
                         continue
                 if "OpenFF" in index[1] and index[0] != "Dataset":
                     sets.append(index)
-
         for s in sets:
             name = s[1].split("/")
             specs = ["default"] if len(name) == 1 else name[1].split()
@@ -82,25 +85,29 @@ class QCArchiveSpellBook:
                 print("Dataset", s, "not in local db, fetching...")
                 newdata = True
                 ds = client.get_collection(s[0], name)
-                drop = (
+                drop_hess = (
                     ["Hessian"]
                     if (s[0] == "TorsionDriveDataset" or self.drop_hessians)
                     else []
                 )
+                self.drop.extend(drop_hess)
+
                 # QCA.build_index( ds, drop=["Hessian"])
                 # drop=[]
 
                 if self.drop_intermediates:
-                    drop.append("Intermediates")
+                    self.drop.append("Intermediates")
 
-                self.QCA.build_index(ds, drop=drop, keep_specs=specs, start=0, limit=0)
+                self.QCA.build_index(
+                    ds, drop=self.drop, keep_specs=specs, start=start, limit=limit
+                )
             else:
                 print("Dataset", s, "already indexed")
 
         if newdata:
             self.save(self.QCA)
 
-    def __init__(self, datasets=None, QCA=None):
+    def __init__(self, datasets=None, QCA=None, start=0, limit=0, drop=None):
 
         import pickle
 
@@ -123,7 +130,8 @@ class QCArchiveSpellBook:
                 aux_sets = datasets
                 load_all = False
 
-            self.load(aux_sets, load_all=load_all)
+            self.drop = drop
+            self.load(aux_sets, load_all=load_all, start=start, limit=limit)
         self.folder_cache = {}
 
         # If data is generated for a parameters, save the list later
@@ -477,10 +485,11 @@ class QCArchiveSpellBook:
 
             valence_type = valence_types[param_code]
 
-            if bond_param and bond_param not in labeler.db["ROOT"]["data"][valence_type]:
-                raise Exception(
-                    "Parameter {} not found in this set".format(bond_param)
-                )
+            if (
+                bond_param
+                and bond_param not in labeler.db["ROOT"]["data"][valence_type]
+            ):
+                raise Exception("Parameter {} not found in this set".format(bond_param))
 
             measure_fn = valence_measures[param_code]
 
@@ -493,7 +502,10 @@ class QCArchiveSpellBook:
 
             valence_type = valence_types[param_code]
 
-            if torsion_param and torsion_param not in labeler.db["ROOT"]["data"][valence_type]:
+            if (
+                torsion_param
+                and torsion_param not in labeler.db["ROOT"]["data"][valence_type]
+            ):
                 raise Exception(
                     "Parameter {} not found in this set".format(torsion_param)
                 )
@@ -526,7 +538,7 @@ class QCArchiveSpellBook:
             self.save(self.QCA)
 
         ##### TIME TO GROUP #####
-        
+
         fid = open("out.dat", "w")
         # smarts angle qmene torsion_label bond_label bond_measure (wbo) (mbo) (mmangle) (mmene) (bond_mmeasure)
         folders = self.QCA.combine_by_entry(targets=entries)
@@ -539,9 +551,9 @@ class QCArchiveSpellBook:
                             "canonical_isomeric_explicit_hydrogen_mapped_smiles"
                         ]
                     )
-                    map_inv = {v - 1: k for k, v in offsb.rdutil.mol.atom_map(rdmol).items()}
-
-
+                    map_inv = {
+                        v - 1: k for k, v in offsb.rdutil.mol.atom_map(rdmol).items()
+                    }
 
                 for td in self.QCA.node_iter_depth_first(entry, select="TorsionDrive"):
                     qmenes = {}
@@ -550,7 +562,6 @@ class QCArchiveSpellBook:
                     min_id = None
                     qmmin = None
                     mmmin = None
-
 
                     # First loop exists only to find the minimum energy
                     for nmol in self.QCA.node_iter_torsiondriverecord_minimum(
@@ -593,7 +604,7 @@ class QCArchiveSpellBook:
                             mmmin = omm_op.db[min_id]["data"]["energy"]
 
                     header = True
-                    traj_fd = open("{:s}.{:s}.xyz".format(td.index, td.payload), 'w')
+                    traj_fd = open("{:s}.{:s}.xyz".format(td.index, td.payload), "w")
                     for nmol in self.QCA.node_iter_torsiondriverecord_minimum(
                         td, select="Molecule"
                     ):
@@ -627,23 +638,31 @@ class QCArchiveSpellBook:
 
                         if labeler is not None:
                             torsion_indices = tuple([map_inv[j] for j in constr])
-                            torsion_label = labeler.db[entry.payload]['data']['ProperTorsions'].get(torsion_indices)
+                            torsion_label = labeler.db[entry.payload]["data"][
+                                "ProperTorsions"
+                            ].get(torsion_indices)
                             if torsion_label is None:
                                 torsion_indices = torsion_indices[::-1]
                                 try:
-                                    torsion_label = labeler.db[entry.payload]['data']['ProperTorsions'][torsion_indices]
+                                    torsion_label = labeler.db[entry.payload]["data"][
+                                        "ProperTorsions"
+                                    ][torsion_indices]
                                 except KeyError:
                                     # There are cases when trying to drive some weird torsions, such as 3 member rings.
                                     # In this case, it seems the FF labels a different tuple, so it does not show up.
-                                    # We just label it as None, and then directly measure it later below, instead of 
+                                    # We just label it as None, and then directly measure it later below, instead of
                                     # relying on our cached calculations (since it won't exist)
                                     torsion_label = "None"
 
                             bond_indices = (torsion_indices[1], torsion_indices[2])
-                            bond_label = labeler.db[entry.payload]['data']['Bonds'].get(bond_indices)
+                            bond_label = labeler.db[entry.payload]["data"]["Bonds"].get(
+                                bond_indices
+                            )
                             if bond_label is None:
                                 bond_indices = bond_indices[::-1]
-                                bond_label = labeler.db[entry.payload]['data']['Bonds'][bond_indices]
+                                bond_label = labeler.db[entry.payload]["data"]["Bonds"][
+                                    bond_indices
+                                ]
 
                         if issubclass(type(qene), simtk.unit.quantity.Quantity):
                             qene /= simtk.unit.kilocalories_per_mole
@@ -663,7 +682,9 @@ class QCArchiveSpellBook:
                         if header:
                             print("#", entry, nmol, end="\n")
                             fid.write(
-                                "# {:s} {:s}\n".format(entry.__repr__(), nmol.__repr__())
+                                "# {:s} {:s}\n".format(
+                                    entry.__repr__(), nmol.__repr__()
+                                )
                             )
                             header = False
 
@@ -683,18 +704,21 @@ class QCArchiveSpellBook:
                                 bo_name = "WIBERG_LOWDIN_INDICES"
                                 try:
                                     wbo_vec = grad.extras["qcvars"][bo_name]
-                                    wbo_val = wbo_vec[i[1] * int(len(wbo_vec) ** 0.5) + i[2]]
+                                    wbo_val = wbo_vec[
+                                        i[1] * int(len(wbo_vec) ** 0.5) + i[2]
+                                    ]
                                 except Exception:
                                     wbo_val = np.nan
-            
+
                             if mbo:
                                 bo_name = "MAYER_INDICES"
                                 try:
                                     mbo_vec = grad["extras"]["qcvars"][bo_name]
-                                    mbo_val = mbo_vec[i[1] * int(len(mbo_vec) ** 0.5) + i[2]]
+                                    mbo_val = mbo_vec[
+                                        i[1] * int(len(mbo_vec) ** 0.5) + i[2]
+                                    ]
                                 except Exception:
                                     mbo_val = np.nan
-
 
                             angle = offsb.op.geometry.TorsionOperation.measure_praxeolitic_single(
                                 qcmol.geometry, i
@@ -716,16 +740,31 @@ class QCArchiveSpellBook:
                                 if mbo:
                                     out_str += " MBO= {:6.4f}".format(mbo_val)
                                 if labeler is not None:
-                                    bond_val = bond_op.db[nmol.payload][bond_indices][0] * offsb.tools.const.bohr2angstrom
-                                    out_str += " BOND= {:4s} {:8.4f}".format(bond_label, bond_val)
+                                    bond_val = (
+                                        bond_op.db[nmol.payload][bond_indices][0]
+                                        * offsb.tools.const.bohr2angstrom
+                                    )
+                                    out_str += " BOND= {:4s} {:8.4f}".format(
+                                        bond_label, bond_val
+                                    )
 
-                                    torsion_val = torsion_op.db[nmol.payload].get(torsion_indices)
+                                    torsion_val = torsion_op.db[nmol.payload].get(
+                                        torsion_indices
+                                    )
                                     if torsion_val is None:
-                                        torsion_val = torsion_op.db[nmol.payload].get(torsion_indices[::-1])
+                                        torsion_val = torsion_op.db[nmol.payload].get(
+                                            torsion_indices[::-1]
+                                        )
                                     if torsion_val is None:
-                                        torsion_val = offsb.op.geometry.TorsionOperation.measure(qcmol.geometry, torsion_indices)[0]
+                                        torsion_val = (
+                                            offsb.op.geometry.TorsionOperation.measure(
+                                                qcmol.geometry, torsion_indices
+                                            )[0]
+                                        )
 
-                                    out_str += " DIHE= {:4s} {:8.4f}".format(torsion_label, torsion_val)
+                                    out_str += " DIHE= {:4s} {:8.4f}".format(
+                                        torsion_label, torsion_val
+                                    )
 
                                 out_str += "\n"
 
@@ -741,14 +780,29 @@ class QCArchiveSpellBook:
                                     out_str += " MBO= {:6.4f}".format(mbo_val)
 
                                 if labeler is not None:
-                                    bond_val = bond_op.db[nmol.payload][bond_indices][0] * offsb.tools.const.bohr2angstrom
-                                    out_str += " BOND= {:4s} {:8.4f}".format(bond_label, bond_val)
-                                    torsion_val = torsion_op.db[nmol.payload].get(torsion_indices)
+                                    bond_val = (
+                                        bond_op.db[nmol.payload][bond_indices][0]
+                                        * offsb.tools.const.bohr2angstrom
+                                    )
+                                    out_str += " BOND= {:4s} {:8.4f}".format(
+                                        bond_label, bond_val
+                                    )
+                                    torsion_val = torsion_op.db[nmol.payload].get(
+                                        torsion_indices
+                                    )
                                     if torsion_val is None:
-                                        torsion_val = torsion_op.db[nmol.payload].get(torsion_indices[::-1])
+                                        torsion_val = torsion_op.db[nmol.payload].get(
+                                            torsion_indices[::-1]
+                                        )
                                     if torsion_val is None:
-                                        torsion_val = offsb.op.geometry.TorsionOperation.measure(qcmol.geometry, torsion_indices)[0]
-                                    out_str += " DIHE= {:4s} {:8.4f}".format(torsion_label, torsion_val)
+                                        torsion_val = (
+                                            offsb.op.geometry.TorsionOperation.measure(
+                                                qcmol.geometry, torsion_indices
+                                            )[0]
+                                        )
+                                    out_str += " DIHE= {:4s} {:8.4f}".format(
+                                        torsion_label, torsion_val
+                                    )
                                 out_str += "\n"
                                 print(out_str, end="")
                                 fid.write(out_str)
@@ -1031,7 +1085,7 @@ class QCArchiveSpellBook:
                         else:
                             atom_key_id = atom_key
 
-                        val = op_vals[atom_key] 
+                        val = op_vals[atom_key]
                         try:
                             val = val[0]
                         except IndexError:
@@ -1134,7 +1188,12 @@ class QCArchiveSpellBook:
             return pickle.load(open(name + ".p", "rb"))
 
         # assume we want all final geometries
-        if len(list(self.QCA.node_iter_depth_first(self.QCA.root(), select="Molecule"))) == 0:
+        if (
+            len(
+                list(self.QCA.node_iter_depth_first(self.QCA.root(), select="Molecule"))
+            )
+            == 0
+        ):
             self.QCA.cache_optimization_minimum_molecules(targets)
 
         query = SmilesSearchTree(smi, self.QCA, "query")
@@ -1172,17 +1231,22 @@ class QCArchiveSpellBook:
             fname = out_fnm
             fid = open(fname, "w")
         QCA = self.QCA
+        QCA.cache_initial_molecules(select="Entry")
+        QCA.cache_initial_molecules(select="TorsionDrive")
+        QCA.cache_initial_molecules(select="Optimization")
+
+        error_list = []
         for ds_id in QCA.root().children:
             ds_node = QCA[ds_id]
-            client = QCA.db[ds_node.payload]['data'].client
+            client = QCA.db[ds_node.payload]["data"].client
             fid.write("==== DATASET ==== {}\n".format(ds_node.name))
+            tdi = 0
             for entry in QCA.iter_entry():
                 specs = [
                     n for n in QCA.node_iter_depth_first(entry) if "QCS" in n.payload
                 ]
                 for spec in specs:
                     mindepth = QCA.node_depth(spec)
-                    tdi = 0
                     for node in QCA.node_iter_dive(spec):
                         i = QCA.node_depth(node) - mindepth + 1
                         status = ""
@@ -1206,17 +1270,15 @@ class QCArchiveSpellBook:
                                     errtype = ""
                                     xyzerrmsg = ""
                                     if not (qcp["error"] is None):
-                                        err = json.loads(
-                                            list(
-                                                client.query_kvstore(
-                                                    int(qcp["error"])
-                                                ).values()
-                                            )[0]
-                                            .dict()["data"]
-                                            .decode()
-                                        )
+                                        err = list(
+                                            client.query_kvstore(
+                                                int(qcp["error"])
+                                            ).values()
+                                        )[0].get_json()
                                         errmsg += "####ERROR####\n"
-                                        errmsg += "Error type: " + err["error_type"] + "\n"
+                                        errmsg += (
+                                            "Error type: " + err["error_type"] + "\n"
+                                        )
                                         errmsg += "Error:\n" + err["error_message"]
                                         errmsg += "############\n"
                                         if (
@@ -1265,14 +1327,18 @@ class QCArchiveSpellBook:
                                         ):
                                             errtype = "needsrestart-brokenpool"
                                         elif (
-                                            len(err["error_message"].strip().strip("\n"))
+                                            len(
+                                                err["error_message"].strip().strip("\n")
+                                            )
                                             == 0
                                         ):
                                             errtype = "emptyerror"
                                         else:
                                             errtype = "nocategory"
 
-                                        for line in err["error_message"].split("\n")[::-1]:
+                                        for line in err["error_message"].split("\n")[
+                                            ::-1
+                                        ]:
                                             if len(line) > 0:
                                                 xyzerrmsg = line
                                                 break
@@ -1315,8 +1381,9 @@ class QCArchiveSpellBook:
                                         tdname = ".".join(tdids)
                                         if len(tdname) > 0:
                                             tdname += "."
+                                        error_name = ""
                                         if len(traj) > 0 and save_xyz:
-                                            fname = (
+                                            error_name = (
                                                 "geometric."
                                                 + errtype
                                                 + ".traj."
@@ -1324,6 +1391,9 @@ class QCArchiveSpellBook:
                                                 + node.payload
                                                 + "."
                                                 + traj[-1].payload
+                                            )
+                                            fname = (
+                                                error_name
                                                 + ".xyz"
                                             )
                                             # print("Trajectory found... saving", fname)
@@ -1342,7 +1412,7 @@ class QCArchiveSpellBook:
                                                 )
                                         else:
                                             mol_id = "QCM-" + qcp["initial_molecule"]
-                                            fname = (
+                                            error_name = (
                                                 "geometric."
                                                 + errtype
                                                 + ".initial."
@@ -1350,11 +1420,20 @@ class QCArchiveSpellBook:
                                                 + node.payload
                                                 + "."
                                                 + mol_id
+                                            )
+                                            fname = (
+                                                error_name
                                                 + ".xyz"
                                             )
                                             # print("Trajectory not found... saving input molecule", fname)
                                             mol = QCA.db[mol_id]["data"]
-                                            if "geometry" in mol and "symbols" in mol.dict() and save_xyz:
+                                            if type(mol) == dict:
+                                                raise Exception("Mol {} is a dictionary (Procedure index {})".format(mol_id, node.index))
+                                            if (
+                                                "geometry" in mol.dict()
+                                                and "symbols" in mol.dict()
+                                                and save_xyz
+                                            ):
                                                 with open(fname, "w") as xyzfid:
                                                     _ = offsb.qcarchive.qcmol_to_xyz(
                                                         mol,
@@ -1367,11 +1446,15 @@ class QCArchiveSpellBook:
                                                         + " Error= "
                                                         + xyzerrmsg,
                                                     )
-                                            else:
+                                            elif save_xyz:
                                                 # print("Initial molecule missing!")
                                                 errmsg += "XXXXISSUEXXXX\n"
-                                                errmsg += "Initial molecule was missing!\n"
+                                                errmsg += (
+                                                    "Initial molecule was missing!\n"
+                                                )
                                                 errmsg += "xxxxxxxxxxxxx\n"
+                                        fid.write("JOB {:s}\n".format(error_name))
+                                        error_list.append(error_name)
                                     if not (qcp["stdout"] is None):
                                         msg = list(
                                             client.query_kvstore(
@@ -1379,7 +1462,9 @@ class QCArchiveSpellBook:
                                             ).values()
                                         )[0]
                                         errmsg += "xxxxISSUExxxx\n"
-                                        errmsg += "Status was not complete; stdout is:\n"
+                                        errmsg += (
+                                            "Status was not complete; stdout is:\n"
+                                        )
                                         errmsg += msg
                                         errmsg += "xxxxxxxxxxxxx\n"
                                     if not (qcp["stderr"] is None):
@@ -1389,17 +1474,14 @@ class QCArchiveSpellBook:
                                             ).values()
                                         )[0]
                                         errmsg += "####ISSUE####\n"
-                                        errmsg += "Status was not complete; stderr is:\n"
+                                        errmsg += (
+                                            "Status was not complete; stderr is:\n"
+                                        )
                                         errmsg += msg
                                         errmsg += "#############\n"
                                 except Exception as e:
-                                    fid.write(
-                                        "Internal issue:\n"
-                                        + str(type(e))
-                                        + "\n"
-                                        + str(e)
-                                        + "\n"
-                                    )
+                                    fid.write("Internal issue:\n")
+                                    traceback.print_exc(limit=None, file=fid)
 
                             if status != "COMPLETE" and node.name == "TorsionDrive":
                                 statbar = "XXXX"
@@ -1421,11 +1503,59 @@ class QCArchiveSpellBook:
                                 err_str = "\n{}\n".format(errmsg)
                                 fid.write(err_str)
 
+        if len(error_list) > 0:
+            fid.write("The following calculations failed:")
+            for error in error_list:
+                fid.write("{:s}\n".format(error))
         fid.write("____Done____\n")
 
         # close file if not std.stdout
         if out_fnm is not None:
             fid.close()
+
+    def _generate_chemical_space_obj(self, ff_fname, clear_existing):
+
+        loader = None
+
+        if ff_fname is None:
+            loader = offsb.chem.chemspa.ChemicalSpace
+            pass
+        else:
+            loader = (
+                offsb.chem.chemspa.ChemicalSpace.default_from_smirnoff_xml
+                if clear_existing
+                else offsb.chem.chemspa.ChemicalSpace.from_smirnoff_xml
+            )
+
+        obj = loader(ff_fname)
+
+    def forcefield_optimize(
+        self,
+        ff_fname=None,
+        clear_existing=False,
+        generate_fit_parameter_targets=False,
+        optimize_types=True,
+        optimize_parameters=True,
+        forcebalance_globals=None,
+    ):
+
+        import offsb.chem.chemspa
+        import offsb.op.forcebalance
+        import offsb.op.chemper
+
+        chemspa = self._generate_chemical_space_obj(ff_fname, clear_existing)
+        forcebalance = offsb.op.forcebalance.ForceBalanceObjectiveOptGeo(
+            forcebalance_globals, self.QCA, "forcebalance", ff_fname, init=None
+        )
+        chemspa.set_physical_optimizer(forcebalance)
+
+        chemper = offsb.op.chemper.ChemperOperation(self.QCA, "chemper")
+        chemspa.set_type_generator(chemper)
+
+        chemspa.optimize(optimize_types=optimize_types, optimize_parameters=False)
+
+        ff_fname = "test2.offxml"
+        ff = chemspa.export_ff(ff_fname)
 
 
 if __name__ == "__main__":
