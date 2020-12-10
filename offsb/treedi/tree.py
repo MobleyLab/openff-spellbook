@@ -1,16 +1,19 @@
-from abc import ABC, abstractmethod
-import tqdm
-from offsb.treedi.node import Node
-from offsb.treedi.node import DIRTY
-from offsb.tools.util import flatten_list
 import logging
-
 import sys
+from abc import ABC, abstractmethod
+
+import tqdm
+
+from offsb.tools.util import flatten_list
+from offsb.treedi.node import DIRTY, Node
 
 LOGSTDOUT = logging.StreamHandler(sys.stdout)
-#FORMAT="[%(asctime)s] %(levelname)s <%(name)s::%(funcName)s>: %(message)s"
-FORMAT="%(message)s"
+# FORMAT="[%(asctime)s] %(levelname)s <%(name)s::%(funcName)s>: %(message)s"
+FORMAT = "%(message)s"
 logging.basicConfig(format=FORMAT)
+
+DEFAULT_DB = dict
+
 
 def link_iter_depth_first(t):
     for c in t.link.values():
@@ -40,6 +43,7 @@ def link_iter_to_root(t, select, state):
 class DatabaseKeyCollisionException:
     pass
 
+
 class DebugDict(dict):
 
     # level = logging.DEBUG
@@ -55,13 +59,14 @@ class DebugDict(dict):
             self._logger.setLevel(level=logging.DEBUG)
             self._logger.debug("DebugDict online")
 
-
     def __setitem__(self, k, v):
         if LOG:
             self.getLogger()
             v0 = super().get(k, None)
             if v0 is not None:
-                self._logger.debug("DBSWP {} KEY {} FROM {} TO {}".format(id(self), k, v0, v))
+                self._logger.debug(
+                    "DBSWP {} KEY {} FROM {} TO {}".format(id(self), k, v0, v)
+                )
                 if DBSWP_IS_FATAL:
                     raise DatabaseKeyCollisionException()
             else:
@@ -88,13 +93,14 @@ class DebugDict(dict):
             self._logger.debug("DBGET {} KEY {} VAL {}".format(id(self), k, v))
         return v
 
+
 LOG = False
 DBSWP_IS_FATAL = False
-#TREELOGLEVEL = logging.DEBUG
+# TREELOGLEVEL = logging.DEBUG
 TREELOGLEVEL = logging.INFO
 
-DEFAULT_DB=dict
-#DEFAULT_DB=DebugDict
+DEFAULT_DB = dict
+# DEFAULT_DB=DebugDict
 
 
 class Tree(ABC):
@@ -106,8 +112,17 @@ class Tree(ABC):
 
     """
 
-    def __init__(self, name, root_payload=None, node_index=None, db=None,
-        index=None, payload=None, dereference=False, verbose=True):
+    def __init__(
+        self,
+        name,
+        root_payload=None,
+        node_index=None,
+        db=None,
+        index=None,
+        payload=None,
+        dereference=False,
+        verbose=True,
+    ):
 
         self.dereference = dereference
         self.verbose = verbose
@@ -153,7 +168,7 @@ class Tree(ABC):
         # self.root = None if self.n_levels == 0 else get_root( list(nodes.values())[0])
         self.ID = ".".join([self.index, self.name])
 
-        self.logger = logging.getLogger("{}::{}".format(str(type(self)), self.ID)) 
+        self.logger = logging.getLogger("{}::{}".format(str(type(self)), self.ID))
         # self.logger.addHandler(LOGSTDOUT)
         self.logger.setLevel(level=TREELOGLEVEL)
         self.logger.debug("Tree database is {}".format(str(type(self.db))))
@@ -184,7 +199,8 @@ class Tree(ABC):
 
     def set_root(self, root):
         self.node_index = {
-            node.index: node for node in self.node_iter_depth_first(root, dereference=False)
+            node.index: node
+            for node in self.node_iter_depth_first(root, dereference=False)
         }
         # self.n_levels = max( [node_level( node) for node in self.node_index.values()])
         # self.n_nodes = node_descendents( root) + 1
@@ -210,8 +226,8 @@ class Tree(ABC):
 
     def __setitem__(self, k, v):
         if self.dereference:
-            self.db[self.node_index[k]]['data'] = v
-            self.db[self.node_index[k]]['type'] = type(v)
+            self.db[self.node_index[k]]["data"] = v
+            self.db[self.node_index[k]]["type"] = type(v)
         else:
             self.node_index[k] = v
 
@@ -280,7 +296,7 @@ class Tree(ABC):
     def _yield(self, v, dereference=None):
         dereference = self.dereference if dereference is None else dereference
         if dereference:
-            ret = self.db.get(v.payload, {}).get('data')
+            ret = self.db.get(v.payload, {}).get("data")
             if ret:
                 yield ret
         else:
@@ -298,20 +314,30 @@ class Tree(ABC):
         else:
             yield from self.yield_if_single(v, select, state, dereference=dereference)
 
-    def node_iter_depth_first_single(self, v, select=None, state=None, dereference=None):
+    def node_iter_depth_first_single(
+        self, v, select=None, state=None, dereference=None
+    ):
         for c in v.children:
             c = self[c]
-            yield from self.node_iter_depth_first_single(c, select, state, dereference=dereference)
+            yield from self.node_iter_depth_first_single(
+                c, select, state, dereference=dereference
+            )
         yield from self.yield_if(v, select, state, dereference=dereference)
 
     def node_iter_depth_first(self, v, select=None, state=None, dereference=None):
         if hasattr(v, "__iter__"):
             for vi in v:
-                yield from self.node_iter_depth_first(vi, select, state, dereference=dereference)
+                yield from self.node_iter_depth_first(
+                    vi, select, state, dereference=dereference
+                )
         else:
-            yield from self.node_iter_depth_first_single(v, select, state, dereference=dereference)
+            yield from self.node_iter_depth_first_single(
+                v, select, state, dereference=dereference
+            )
 
-    def node_iter_breadth_first_single(self, v, select=None, state=None, dereference=None):
+    def node_iter_breadth_first_single(
+        self, v, select=None, state=None, dereference=None
+    ):
         if v.parent is None:
             self._yield(v, dereference=dereference)
         for c in v.children:
@@ -319,40 +345,58 @@ class Tree(ABC):
             yield from self.yield_if(c, select, state, dereference)
         for c in v.children:
             c = self[c]
-            yield from self.node_iter_breadth_first_single(c, select, state, dereference=dereference)
+            yield from self.node_iter_breadth_first_single(
+                c, select, state, dereference=dereference
+            )
 
     def node_iter_breadth_first(self, v, select=None, state=None, dereference=None):
         if hasattr(v, "__iter__"):
             for vi in v:
-                yield from self.node_iter_breadth_first(vi, select, state, dereference=dereference)
+                yield from self.node_iter_breadth_first(
+                    vi, select, state, dereference=dereference
+                )
         else:
-            yield from self.node_iter_breadth_first_single(v, select, state, dereference=dereference)
+            yield from self.node_iter_breadth_first_single(
+                v, select, state, dereference=dereference
+            )
 
     def node_iter_dive_single(self, v, select=None, state=None, dereference=None):
         yield from self.yield_if_single(v, select, state, dereference=dereference)
         for c in v.children:
             c = self[c]
-            yield from self.node_iter_dive_single(c, select, state, dereference=dereference)
+            yield from self.node_iter_dive_single(
+                c, select, state, dereference=dereference
+            )
 
     def node_iter_dive(self, v, select=None, state=None, dereference=None):
         if hasattr(v, "__iter__"):
             for vi in v:
-                yield from self.node_iter_dive(vi, select, state, dereference=dereference)
+                yield from self.node_iter_dive(
+                    vi, select, state, dereference=dereference
+                )
         else:
-            yield from self.node_iter_dive_single(v, select, state, dereference=dereference)
+            yield from self.node_iter_dive_single(
+                v, select, state, dereference=dereference
+            )
 
     def node_iter_to_root_single(self, v, select=None, state=None, dereference=None):
         yield from self.yield_if_single(v, select, state, dereference=dereference)
         if v.parent is not None:
             parent = self[v.parent]
-            yield from self.node_iter_to_root_single(parent, select, state, dereference=dereference)
+            yield from self.node_iter_to_root_single(
+                parent, select, state, dereference=dereference
+            )
 
     def node_iter_to_root(self, v, select=None, state=None, dereference=None):
         if hasattr(v, "__iter__"):
             for vi in v:
-                yield from self.node_iter_to_root(vi, select, state, dereference=dereference)
+                yield from self.node_iter_to_root(
+                    vi, select, state, dereference=dereference
+                )
         else:
-            yield from self.node_iter_to_root_single(v, select, state, dereference=dereference)
+            yield from self.node_iter_to_root_single(
+                v, select, state, dereference=dereference
+            )
 
     def get_root(self, node):
         if node.parent is None:
@@ -374,10 +418,10 @@ class Tree(ABC):
 
 
 class PartitionTree(Tree):
-    """ A parition tree holds indices and applies them to nodes 
-        Importantly, partition trees are not trees... 
-        They are a dictionary, where it copies the source tree index as keys,
-        and puts data in there
+    """A parition tree holds indices and applies them to nodes
+    Importantly, partition trees are not trees...
+    They are a dictionary, where it copies the source tree index as keys,
+    and puts data in there
     """
 
     def __init__(self, source_tree, name, verbose=True):
@@ -406,6 +450,7 @@ class PartitionTree(Tree):
 
     def to_pickle_str(self):
         import pickle
+
         return pickle.dumps(self)
 
     def apply(self):
@@ -453,7 +498,13 @@ class TreeOperation(PartitionTree):
     def _unpack_work(self, work, exceptions_are_fatal=True):
 
         n_work = len(work)
-        for n, future in tqdm.tqdm(enumerate(work, 1), total=n_work, ncols=80, disable=not self.verbose, desc=self.name):
+        for n, future in tqdm.tqdm(
+            enumerate(work, 1),
+            total=n_work,
+            ncols=80,
+            disable=not self.verbose,
+            desc=self.name,
+        ):
             try:
                 val = future.get()
             except RuntimeError as e:
@@ -470,11 +521,14 @@ class TreeOperation(PartitionTree):
     def _apply_parallel(self, targets, exceptions_are_fatal=True):
 
         from multiprocessing.pool import Pool as Pool
+
         exe = Pool(processes=self.processes)
 
         try:
             work = []
-            for i, tgt in tqdm.tqdm(enumerate(targets, 1), ncols=80, desc="Submit", disable=True):
+            for i, tgt in tqdm.tqdm(
+                enumerate(targets, 1), ncols=80, desc="Submit", disable=False
+            ):
                 kwargs = self._generate_apply_kwargs(i, tgt)
                 task = exe.apply_async(self.apply_single, (i, tgt), kwargs)
                 work.append(task)
@@ -494,7 +548,9 @@ class TreeOperation(PartitionTree):
         if targets is None:
             root = self.source.source.root()
             targets = list(
-                self.source.source.node_iter_depth_first(root, select=select, dereference=False)
+                self.source.source.node_iter_depth_first(
+                    root, select=select, dereference=False
+                )
             )
         elif not hasattr(targets, "__iter__"):
             targets = [targets]
@@ -502,7 +558,9 @@ class TreeOperation(PartitionTree):
         # since we can only operate on self._select, force it
         targets = flatten_list(
             [
-                self.source.source.node_iter_depth_first(x, select=select, dereference=False)
+                self.source.source.node_iter_depth_first(
+                    x, select=select, dereference=False
+                )
                 for x in targets
             ]
         )
@@ -519,7 +577,13 @@ class TreeOperation(PartitionTree):
 
         elif self.processes == 1:
 
-            for n, target in tqdm.tqdm(enumerate(targets, 1), total=len(targets), ncols=80, disable=not self.verbose, desc=self.name):
+            for n, target in tqdm.tqdm(
+                enumerate(targets, 1),
+                total=len(targets),
+                ncols=80,
+                disable=not self.verbose,
+                desc=self.name,
+            ):
                 o = str(target)
                 self.logger.debug("Begin processing target {}".format(o))
                 kwargs = self._generate_apply_kwargs(n, target, kwargs=DEFAULT_DB())
