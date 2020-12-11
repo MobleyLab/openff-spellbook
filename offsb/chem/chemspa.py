@@ -1008,6 +1008,10 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         self._po.ff_fname = newff_name
 
         self._po._init = False
+        if self.trust0 is None:
+            self.trust0 = self._po._options.get("trust0", 0.1) 
+        if self.finite_difference_h is None:
+            self.finite_difference_h = self._po._options.get("finite_difference_h", .01)
         print("Setting trust0 to", self.trust0)
         print("Setting finite_difference_h to", self.finite_difference_h)
         self._po.load_options(options_override={"trust0": self.trust0, "finite_difference_h": self.finite_difference_h})
@@ -1228,6 +1232,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         self._po.ff_fname = newff_name
         self._po._init = False
 
+        self.trust0 = None
+        self.finite_difference_h = None
         if optimize_types:
             print("Performing initial FF fit...")
             while True:
