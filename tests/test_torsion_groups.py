@@ -17,3 +17,21 @@ def test_torsion_group_contains():
     b._atom3._symbol[1] = True
     assert a in b
 
+def test_torsion_group_marginal():
+    breakpoint()
+
+    a = offsb.chem.types.TorsionGroup()
+    b = offsb.chem.types.TorsionGroup()
+    ret = a == b
+    assert ret
+
+    ret = a != b
+    assert not ret
+
+    a._atom2._symbol[1] = True
+    b._atom3._symbol[1] = True
+    ret = a != b
+    assert ret
+
+    ret = a == b
+    assert not ret
