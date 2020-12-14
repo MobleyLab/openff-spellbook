@@ -211,6 +211,9 @@ class BitVec:
         maxbits = min(self.maxbits, o.maxbits)
         return BitVec(a, inv, maxbits=maxbits)
 
+    def __hash__(self):
+        return hash(int(self.reduce()))
+
     def __and__(self, o):
         return self._logical_op(o, np.logical_and)
 
@@ -230,10 +233,10 @@ class BitVec:
         return self & (self ^ o)
 
     def __eq__(self, o):
-        a, b = self.reduce_longest(o)
-        return a == b
+        # a, b = self.reduce_longest(o)
+        return hash(self) == hash(o)
 
-    def __neq__(self, o):
+    def __ne__(self, o):
         return not self == o
 
 
@@ -259,9 +262,6 @@ class ChemType(abc.ABC):
 
         for field in self._fields:
             setattr(self, field, getattr(self, field))
-
-    def __hash__(self):
-        return int(self.reduce())
 
     def is_primitive(self):
 
@@ -493,13 +493,20 @@ class ChemType(abc.ABC):
             if (o_vec - a_vec).reduce() > 0:
                 return False
         return True
-        
-        return all([(x ^ self.inv or ((x ^ self.inv) and (y ^ o.inv))) for x,y, in it.zip_longest(self, o, fillvalue=self.inv)])
+
+        return all(
+            [
+                (x ^ self.inv or ((x ^ self.inv) and (y ^ o.inv)))
+                for x, y, in it.zip_longest(self, o, fillvalue=self.inv)
+            ]
+        )
         # return (self - o).reduce() > 0
 
+    def __hash__(self):
+        return hash(tuple([hash(getattr(self, field)) for field in self._fields]))
+
     def __eq__(self, o):
-        a, b = self.reduce_longest(o)
-        return a == b
+        return hash(self) == hash(o)
 
     def __lt__(self, o):
         a, b = self.reduce_longest(o)
@@ -518,8 +525,7 @@ class ChemType(abc.ABC):
         return a >= b
 
     def __ne__(self, o):
-        a, b = self.reduce_longest(o)
-        return a != b
+        return not self == o
 
 
 class AtomType(ChemType):
@@ -1099,7 +1105,6 @@ class BondType(ChemType):
 
 
 class ChemGraph(ChemType, abc.ABC):
-
     def __init__(self):
         super().__init__()
 
@@ -1136,9 +1141,6 @@ class ChemGraph(ChemType, abc.ABC):
             smarts += chemtype.to_smarts(tag=tag)
 
         return smarts
-
-    def __hash__(self):
-        return hash(tuple([hash(getattr(self, field)) for field in self._fields]))
 
     @classmethod
     def from_string(cls, string):
@@ -1218,42 +1220,41 @@ class ChemGraph(ChemType, abc.ABC):
 
         return self.from_data(*ret_fields)
 
-    def __add__(self, o):
-        # a + b is union
-        return self.__or__(o)
+    # def __add__(self, o):
+    #     # a + b is union
+    #     return self.__or__(o)
 
-    def __sub__(self, o):
-        # a - b is a marginal, note that a - b != b - a
-        a = self.__xor__(o)
-        return self & a
+    # def __sub__(self, o):
+    #     # a - b is a marginal, note that a - b != b - a
+    #     a = self.__xor__(o)
+    #     return self & a
 
-    def __eq__(self, o):
-        a, b = self.reduce_longest(o)
-        return a == b
+    # def __eq__(self, o):
+    #     # a, b = self.reduce_longest(o)
+    #     return hash(self) == hash(o)
 
-    def __lt__(self, o):
-        a, b = self.reduce_longest(o)
-        return a < b
+    # def __lt__(self, o):
+    #     a, b = self.reduce_longest(o)
+    #     return a < b
 
-    def __gt__(self, o):
-        a, b = self.reduce_longest(o)
-        return a > b
+    # def __gt__(self, o):
+    #     a, b = self.reduce_longest(o)
+    #     return a > b
 
-    def __le__(self, o):
-        a, b = self.reduce_longest(o)
-        return a <= b
+    # def __le__(self, o):
+    #     a, b = self.reduce_longest(o)
+    #     return a <= b
 
-    def __ge__(self, o):
-        a, b = self.reduce_longest(o)
-        return a >= b
+    # def __ge__(self, o):
+    #     a, b = self.reduce_longest(o)
+    #     return a >= b
 
-    def __ne__(self, o):
-        a, b = self.reduce_longest(o)
-        return a != b
+    # def __ne__(self, o):
+    #     a, b = self.reduce_longest(o)
+    #     return a != b
 
 
 class BondGroup(ChemGraph):
-
     def __init__(self, atom1=None, bond=None, atom2=None):
         if atom1 is None:
             atom1 = AtomType()
@@ -1412,7 +1413,6 @@ class BondGroup(ChemGraph):
 
 
 class BondGraph(ChemGraph):
-
     def __init__(self, atom1=None, bond=None, atom2=None):
         if atom1 is None:
             atom1 = AtomType()
@@ -1792,8 +1792,8 @@ class AngleGraph(ChemGraph):
                 + self._atom3.to_smarts()
             )
 
-class DihedralGraph(ChemGraph):
 
+class DihedralGraph(ChemGraph):
     def __init__(
         self,
         atom1=None,
@@ -1849,7 +1849,6 @@ class DihedralGraph(ChemGraph):
             return super().__contains__(rev)
         return True
 
-
     @classmethod
     def from_data(cls, atom1, bond1, atom2, bond2, atom3, bond3, atom4):
         return cls(atom1, bond1, atom2, bond2, atom3, bond3, atom4)
@@ -1869,6 +1868,7 @@ class DihedralGraph(ChemGraph):
     def _split_string(cls, string):
         tokens = cls._smirks_splitter(string, atoms=4)
         return cls.from_string_list(tokens)
+
 
 class DihedralGroup(ChemGraph, abc.ABC):
     def __init__(
@@ -1918,7 +1918,6 @@ class DihedralGroup(ChemGraph, abc.ABC):
                 "_atom2",
             ]
 
-        
         super().__init__()
 
     @classmethod
@@ -1984,7 +1983,6 @@ class DihedralGroup(ChemGraph, abc.ABC):
 
 
 class TorsionGraph(DihedralGraph):
-
     def __repr__(self):
         return (
             "("
@@ -2051,8 +2049,8 @@ class TorsionGraph(DihedralGraph):
                 + self._atom4.to_smarts()
             )
 
-class TorsionGroup(DihedralGroup):
 
+class TorsionGroup(DihedralGroup):
     def __repr__(self):
         return (
             "("
@@ -2065,7 +2063,7 @@ class TorsionGroup(DihedralGroup):
             + self._bond2.__repr__()
             + "] ("
             + self._atom3.__repr__()
-            + ")" 
+            + ")"
         )
 
     def __contains__(self, o):
@@ -2096,8 +2094,8 @@ class TorsionGroup(DihedralGroup):
                 + self._atom1.to_smarts()
             )
 
-class OutOfPlaneGraph(DihedralGraph):
 
+class OutOfPlaneGraph(DihedralGraph):
     def __init__(self, atom1, bond1, atom2, bond2, atom3, bond3, atom4):
         super().__init__(atom1, bond1, atom2, bond2, atom3, bond3, atom4)
 
@@ -2213,7 +2211,6 @@ class OutOfPlaneGraph(DihedralGraph):
             return True
         return super().__contains__(rev)
 
-
     def to_smarts(self, tag=True):
 
         if tag:
@@ -2221,8 +2218,10 @@ class OutOfPlaneGraph(DihedralGraph):
                 self._atom1.to_smarts(1)
                 + self._bond1.to_smarts()
                 + self._atom2.to_smarts(2)
-                + "(" + self._bond2.to_smarts()
-                + self._atom3.to_smarts(3) + ")"
+                + "("
+                + self._bond2.to_smarts()
+                + self._atom3.to_smarts(3)
+                + ")"
                 + self._bond3.to_smarts()
                 + self._atom4.to_smarts(4)
             )
@@ -2231,14 +2230,16 @@ class OutOfPlaneGraph(DihedralGraph):
                 self._atom1.to_smarts()
                 + self._bond1.to_smarts()
                 + self._atom2.to_smarts()
-                + "(" + self._bond2.to_smarts()
-                + self._atom3.to_smarts() + ")"
+                + "("
+                + self._bond2.to_smarts()
+                + self._atom3.to_smarts()
+                + ")"
                 + self._bond3.to_smarts()
                 + self._atom4.to_smarts()
             )
 
-class OutOfPlaneGroup(DihedralGroup):
 
+class OutOfPlaneGroup(DihedralGroup):
     def __repr__(self):
         return (
             "("
@@ -2275,8 +2276,10 @@ class OutOfPlaneGroup(DihedralGroup):
                 self._atom1.to_smarts(1)
                 + self._bond1.to_smarts()
                 + self._atom2.to_smarts(2)
-                + "(" + self._bond2.to_smarts()
-                + self._atom3.to_smarts(3) + ")"
+                + "("
+                + self._bond2.to_smarts()
+                + self._atom3.to_smarts(3)
+                + ")"
                 + self._bond1.to_smarts()
                 + self._atom1.to_smarts(4)
             )
@@ -2285,8 +2288,10 @@ class OutOfPlaneGroup(DihedralGroup):
                 self._atom1.to_smarts()
                 + self._bond1.to_smarts()
                 + self._atom2.to_smarts()
-                + "(" + self._bond2.to_smarts()
-                + self._atom3.to_smarts() + ")"
+                + "("
+                + self._bond2.to_smarts()
+                + self._atom3.to_smarts()
+                + ")"
                 + self._bond1.to_smarts()
                 + self._atom1.to_smarts()
             )
