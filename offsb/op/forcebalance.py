@@ -72,6 +72,8 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         self.cleanup = True
         self._options = None
         self._tgt_opts = None
+            
+        self.options_override = None
 
         self.fitting_targets = ["geometry", "energy"]
         DummyTree.source = source_tree
@@ -154,9 +156,13 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
 
     def load_options(self, options_override=None):
         # The general options and target options that come from parsing the input file
-        self._options, self._tgt_opts = parse_inputs("optimize.in")
-        if options_override is not None:
-            self._options.update(options_override)
+        if os.path.exists("optimize.in"):
+            self._options, self._tgt_opts = parse_inputs("optimize.in")
+            if options_override is not None:
+                self._options.update(options_override)
+            self.options_override = None
+        else:
+            self.options_override = options_override
 
     def apply(
         self,
@@ -190,6 +196,11 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
 
         if self._options is None or self._tgt_opts is None:
             self.load_options()
+
+        if self.options_override is not None:
+            self._options.update(self.options_override)
+            self.options_override = None
+
         self._options["jobtype"] = jobtype
 
         self._forcefield = forcebalance.forcefield.FF(self._options)
@@ -201,6 +212,7 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         opts = self._options.copy()
 
         self.db.clear()
+
         self.db["ROOT"] = {"data": self._forcefield.plist}
 
         # remote = opts.get("asynchronous", False)
@@ -1086,7 +1098,7 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
         # export the FF
         args = (self.prefix + ".offxml",)
 
-        # default case if we don't want any parameters fit, i.e. no "cosmetic attributes"
+        # default case if we don't want any parameters fit, e.g. no "cosmetic attributes"
         kwargs = dict(
             parameterize_handlers=parameterize_handlers,
             parameterize_spatial=parameterize_spatial,

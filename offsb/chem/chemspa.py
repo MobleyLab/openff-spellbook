@@ -274,7 +274,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
                 smirks = "[*:1]"
                 param_dict = dict(
-                    epsilon="0.5 * kilocalorie/mole",
+                    epsilon="100 * kilocalorie/mole",
                     rmin_half="1.2 * angstrom",
                     smirks=smirks,
                     id="n1",
@@ -553,7 +553,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             for bit in group:
                 if verbose:
                     print("Scanning for bit", bit)
-                if bit in ignore_bits:
+                if any([x == bit for x in ignore_bits]):
                     if verbose:
                         print("Ignoring since it is in the ignore list")
                     continue
@@ -626,7 +626,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             bit_gradients, key=lambda x: np.max(np.abs(x[2])), reverse=True
         )
         split_bit = bit_gradients[0][1]
-        if split_bit not in ignore_bits:
+        if all([x != split_bit for x in ignore_bits]):
             ignore_bits[split_bit] = bit_gradients[0][2]
             # child = group - split_bit
             lbl = bit_gradients[0][0]
@@ -1020,7 +1020,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 self._po.apply(jobtype=jobtype)
                 break
             except RuntimeError:
-                # self._bump_zero_parameters(1e-3, names="epsilon")
+                self._bump_zero_parameters(1e-3, names="epsilon")
                 self.trust0 = self._po._options["trust0"] / 2.0
                 self.finite_difference_h = self._po._options["finite_difference_h"] / 2.0
                 print(
@@ -1044,26 +1044,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             print("Microiter", i)
             i += 1
 
-            # remove the previous term if it exists
-            if node is not None:
-                print("Remove parameter", node)
-                self[node.parent].children.remove(node.index)
-                self.node_index.pop(node.index)
-                self.db.pop(node.payload)
-
-                newff_name = "newFF.offxml"
-                self.to_smirnoff_xml(newff_name, verbose=False)
-                # self._po._options["forcefield"] = [newff_name]
-
-                self._po._setup.ff_fname = newff_name
-                self._po.ff_fname = newff_name
-
-                self._po._init = False
-
-            # to run again with a new ff, just do:
-            # self._po._options['forcefield'] = newff
-            # where newff is a filename
-
+            success = True
+            olddb = self._po.db.copy()
             param_data, all_data = self._combine_optimization_data()
 
             print("Finding new split...")
@@ -1076,14 +1058,6 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             if node is None:
                 break
 
-            newff_name = "newFF.offxml"
-            self.to_smirnoff_xml(newff_name, verbose=False)
-            # self._po._options["forcefield"] = [newff_name]
-
-            self._po._setup.ff_fname = newff_name
-            self._po.ff_fname = newff_name
-            self._po._init = False
-
             # self._po._options["forcefield"] = [newff_name]
             print("Calculating new gradient with split param")
 
@@ -1094,30 +1068,47 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 self._po.apply(jobtype=jobtype)
             except RuntimeError:
                 print("Gradient failed for this split; skipping")
-                continue
+
+                success = False
+
             self._po.logger.setLevel(self.logger.getEffectiveLevel())
-            grad_new = self._po.G
-            # np.linalg.norm(
-            #     np.vstack(
-            #         [
-            #             v["dV"].sum(axis=1)
-            #             for k, v in self._po._objective.ObjDict.items()
-            #             if hasattr(v, "__iter__") and "dV" in v and v["dV"] is not None
-            #         ]
-            #     ).sum(axis=0)
-            # )
-            print(
-                "grad_new",
-                grad_new,
-                "grad",
-                grad,
-                "grad_new < grad*scale?",
-                grad_new < grad * grad_scale,
-            )
-            # if grad_new < best[1]:
-            #     best = [node.copy(), grad_new, node.parent, self.db[node.payload]]
-            best = [node, grad_new, node.parent, self.db[node.payload]]
-            break
+
+            if success:
+                grad_new = self._po.G
+                print(
+                    "grad_new",
+                    grad_new,
+                    "grad",
+                    grad,
+                    "grad_new < grad*scale?",
+                    grad_new < grad * grad_scale,
+                )
+                # if grad_new < best[1]:
+                #     best = [node.copy(), grad_new, node.parent, self.db[node.payload]]
+
+                # current mode: take the best looking split
+                best = [node, grad_new, node.parent, self.db[node.payload]]
+                break
+
+            # remove the previous term if it exists
+            print("Remove parameter", node)
+            self[node.parent].children.remove(node.index)
+            self.node_index.pop(node.index)
+            self.db.pop(node.payload)
+
+            newff_name = "newFF.offxml"
+            self.to_smirnoff_xml(newff_name, verbose=False)
+            # self._po._options["forcefield"] = [newff_name]
+
+            self._po._setup.ff_fname = newff_name
+            self._po.ff_fname = newff_name
+
+            self._po._init = False
+
+            # if there is an exception, the po will have no data
+
+            self._po.db = olddb
+
 
         if best[0] is not None:
             # only readd if we did a complete scan, since we terminate that case
@@ -1399,37 +1390,88 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             self.to_pickle()
             print("Splitting done; performing final optimization")
 
+            while True:
+                try:
+                    self._po.apply(jobtype="OPTIMIZE")
+                    break
+                except RuntimeError:
+                    self._bump_zero_parameters(1e-3, names="epsilon")
+                    self.trust0 = self._po._options["trust0"] / 2.0
+                    print(
+                        "Initial optimization failed; reducing trust radius to", self.trust0
+                    )
+                    self._po._options["trust0"] = self.trust0
+                    mintrust = self._po._options["mintrust"]
+                    if self.trust0 < mintrust:
+                        print(
+                            "Trust radius below minimum trust of {}; cannot proceed.".format(
+                                mintrust
+                            )
+                        )
+                        return
+
         if optimize_parameters:
-            try:
-                if not optimize_types:
-                    self._po.apply(jobtype="GRADIENT")
-                    initial = self._po.X
+            if not optimize_types:
+                while True:
+                    try:
+                            self._po.apply(jobtype="GRADIENT")
+                            initial = self._po.X
+                            self.trust0 = self._po._options["trust0"]
+                            break
+                    except RuntimeError as e:
+                        self.trust0 = self._po._options["trust0"] / 2.0
+                        print(
+                            "Initial gradient failed; reducing trust radius to", self.trust0
+                        )
+                        self._po._options["trust0"] = self.trust0
+                        mintrust = self._po._options["mintrust"]
+                        if self.trust0 < mintrust:
+                            print(
+                                "Trust radius below minimum trust of {}; cannot proceed.".format(
+                                    mintrust
+                                )
+                            )
+                            raise
 
-                self._po.apply(jobtype="OPTIMIZE")
-                obj = self._po.X
-            except RuntimeError as e:
-                raise e
-                breakpoint()
-                # Some target failed... just use the current best
+            while True:
+                try:
+                    self._po.apply(jobtype="OPTIMIZE")
+                    obj = self._po.X
+                    self.trust0 = self._po._options["trust0"]
+                    break
+                except RuntimeError as e:
+                    self.trust0 = self._po._options["trust0"] / 2.0
+                    print(
+                        "Optimization failed; reducing trust radius to", self.trust0
+                    )
+                    self._po._options["trust0"] = self.trust0
+                    mintrust = self._po._options["mintrust"]
+                    if self.trust0 < mintrust:
+                        print(
+                            "Trust radius below minimum trust of {}; cannot proceed.".format(
+                                mintrust
+                            )
+                        )
+                        raise
+            # Some target failed... just use the current best
 
-                # FB likes to change directories
-                # if we fail, it appears we are in some iter_xxxx directory,
-                # and there should be an offxml there... keep it
-                new_ff = self._po._setup.prefix + ".offxml"
-                # new_ff_path = os.path.join("result", self._po._setup.prefix, new_ff)
-                if os.path.exists(new_ff):
-                    self._po.new_ff = ForceField(new_ff, allow_cosmetic_attributes=True)
-                else:
-                    print("Could not find FF from best iteration!")
-                obj = np.inf
-            finally:
-                self.load_new_parameters(self._po.new_ff)
-                newff_name = "newFF.offxml"
-                # self._plot_gradients(fname_prefix="optimized.final")
-                print("Optimized objective is", obj, "initial was", initial)
-                print("Total drop is", obj - initial)
-                self.to_smirnoff_xml(newff_name, verbose=True, renumber=True)
-                self.to_pickle()
+            # FB likes to change directories
+            # if we fail, it appears we are in some iter_xxxx directory,
+            # and there should be an offxml there... keep it
+            new_ff = self._po._setup.prefix + ".offxml"
+            # new_ff_path = os.path.join("result", self._po._setup.prefix, new_ff)
+            if os.path.exists(new_ff):
+                self._po.new_ff = ForceField(new_ff, allow_cosmetic_attributes=True)
+            else:
+                print("Could not find FF from best iteration!")
+
+            self.load_new_parameters(self._po.new_ff)
+            newff_name = "newFF.offxml"
+            # self._plot_gradients(fname_prefix="optimized.final")
+            print("Optimized objective is", obj, "initial was", initial)
+            print("Total drop is", obj - initial)
+            self.to_smirnoff_xml(newff_name, verbose=True, renumber=True)
+            self.to_pickle()
 
     @classmethod
     def from_smirnoff(self, input):
