@@ -53,7 +53,13 @@ class QCArchiveSpellBook:
     def load(self, sets, load_all=False, start=0, limit=0):
 
         # client = ptl.FractalClient("localhost:7777", verify=False)
-        client = ptl.FractalClient()
+        try:
+            client = ptl.FractalClient()
+        except ConnectionRefusedError as e:
+            print(e)
+            print("Continuing with verify=False...")
+            client = ptl.FractalClient(verify=False)
+            
         if self.QCA is None:
             self.QCA = qca.QCATree(
                 "QCA", root_payload=client, node_index=dict(), db=dict()
