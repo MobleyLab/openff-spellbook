@@ -81,7 +81,10 @@ class Node:
             "No" if self.payload is None else str(self.payload),
         )
 
-    def add(self, v):
+    def add(self, v, index=None):
         assert isinstance(v, Node)
-        self.children.append(v.index)
+        if index is None:
+            self.children.append(v.index)
+        else:
+            self.children.insert(index, v.index)
         v.parent = self.index

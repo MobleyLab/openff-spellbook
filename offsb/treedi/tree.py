@@ -256,7 +256,7 @@ class Tree(ABC):
         [tree.register_modified(node) for node in self.node_index.values()]
         return tree
 
-    def add(self, parent_index, child):
+    def add(self, parent_index, child, index=None):
         """
         takes a parent node index and a fresh constructed node
         inserts the payload into the db and creates a reference in the node
@@ -269,7 +269,7 @@ class Tree(ABC):
         parent = self[parent_index]
         child.index = str(self.N)  # + '-' + child.index
         self.N += 1
-        parent.add(child)
+        parent.add(child, index=index)
         child.tree = self.name
         self[child.index] = child
         return child
