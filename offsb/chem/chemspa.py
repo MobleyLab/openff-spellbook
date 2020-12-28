@@ -2009,8 +2009,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 # allow everything since we only accept if it lowers the grad
                 eps = 0.0
                 key = None
-                mode = "sum_difference"
-                # mode = "mag_difference"
+                # mode = "sum_difference"
+                mode = "mag_difference"
                 param_data, all_data = self._combine_optimization_data()
 
             if ignore_parameters is not None:
@@ -2102,14 +2102,18 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 self._po.db = olddb
             else:
                 best = [node, np.inf, node.parent, self.db[node.payload]]
+                # hack so that we add it using the common path below
+                self[node.parent].children.remove(node.index)
+                self.node_index.pop(node.index)
+                self.db.pop(node.payload)
                 break
 
         if best[0] is not None:
-            # only readd if we did a complete scan, since we terminate that case
-            # with no new node, and the best has to be read
+            # only re-add if we did a complete scan, since we terminate that case
+            # with no new node, and the best has to be re-added
             # if we break early, the node is already there
-            # self.add(best[2], best[0])
-            # self.db[best[0].payload] = best[3]
+            self.add(best[2], best[0])
+            self.db[best[0].payload] = best[3]
 
             print("Best split parameter")
             print(best[0])
