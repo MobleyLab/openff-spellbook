@@ -31,8 +31,8 @@ class _DummyTree:
 
 
 class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
-    def __init__(self, source_tree, name, filename=None, ff_kwargs=None):
-        super().__init__(source_tree, name)
+    def __init__(self, source_tree, name, filename=None, ff_kwargs=None, verbose=False):
+        super().__init__(source_tree, name, verbose=verbose)
 
         # This tree operates on entries
         self._select = "Entry"
@@ -59,15 +59,18 @@ class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
                 else:
                     pth = entry_point.load()()[0]
                 abspth = os.path.join(pth, filename)
-                self.logger.info("Searching {}".format(abspth))
+                if verbose:
+                    self.logger.info("Searching {}".format(abspth))
                 if os.path.exists(abspth):
                     self.abs_path = abspth
-                    self.logger.info("Found {}".format(abspth))
+                    if verbose:
+                        self.logger.info("Found {}".format(abspth))
                     found = True
                     break
             if not found:
                 raise Exception("Forcefield could not be found")
-            print("loading", self.abs_path)
+            if verbose:
+                self.logger.info("loading {}".format(self.abs_path))
             self.forcefield = OFF.ForceField(
                 self.abs_path, disable_version_check=True, **ff_kwargs
             )
@@ -304,6 +307,7 @@ class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
     def apply(self, targets=None):
         super().apply(self._select, targets=targets)
 
+
     def enable_forcebalance_fitting(self, spatial=False, force=False, terms=None):
 
         name = self._key
@@ -480,6 +484,8 @@ class OpenForceFieldTorsionTree(OpenForceFieldTreeBase):
 
         return parameterize
 
+    def _initialize_parameters(self, spatial=False, force=False, terms=None):
+        pass
 
 class OpenForceFieldImproperTorsionTree(OpenForceFieldTreeBase):
     def __init__(self, source_tree, name, filename=None, ff_kwargs=None):
@@ -532,8 +538,8 @@ class OpenForceFieldTree(OpenForceFieldTreeBase):
     5 operations
     """
 
-    def __init__(self, source_tree, name, filename, ff_kwargs=None):
-        super().__init__(source_tree, name, filename=filename, ff_kwargs=ff_kwargs)
+    def __init__(self, source_tree, name, filename, ff_kwargs=None, verbose=True):
+        super().__init__(source_tree, name, filename=filename, ff_kwargs=ff_kwargs, verbose=verbose)
 
         self._fields = ["_vdw", "_bonds", "_angles", "_outofplane", "_dihedral"]
         types = [
