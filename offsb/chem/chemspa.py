@@ -7,6 +7,7 @@ import logging
 import os
 import pprint
 import re
+import sys
 import tempfile
 
 import numpy as np
@@ -26,6 +27,10 @@ from openforcefield.typing.engines.smirnoff.parameters import (
     ParameterList, ProperTorsionHandler, ValenceDict, vdWHandler)
 
 VDW_DENOM = 10.0
+
+# some clusters may reduce this default value; we need it since our trees
+# can extend 1000+ nodes
+sys.setrecursionlimit(10000)
 
 prim_to_graph = {
     "n": offsb.chem.types.AtomType,
