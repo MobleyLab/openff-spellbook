@@ -2067,17 +2067,17 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                     )
 
                     # current mode: take the best looking split
-                    # best = [node, grad_new, node.parent, self.db[node.payload]]
-                    # break
+                    best = [node, grad_new, node.parent, self.db[node.payload]]
+                    break
 
                     # hard core mode: only take the one with the smaller grad
-                    if grad_new < best[1]:
-                        best = [
-                            node.copy(),
-                            grad_new,
-                            node.parent,
-                            self.db[node.payload],
-                        ]
+                    # if grad_new < best[1]:
+                    #     best = [
+                    #         node.copy(),
+                    #         grad_new,
+                    #         node.parent,
+                    #         self.db[node.payload],
+                    #     ]
 
                 # remove the previous term if it exists
                 print("Remove parameter", node)
@@ -2757,11 +2757,15 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
                         if optimize_during_typing:
                             print("Performing micro optimization for new split")
+                            newff_name = "newFF.offxml"
+                            self.to_smirnoff_xml(newff_name, verbose=False)
+                            self._po._setup.ff_fname = newff_name
+                            self._po.ff_fname = newff_name
+                            self._po._init = False
                             self._po.apply(jobtype="OPTIMIZE")
                             obj = self._po.X
                             print("Objective after minimization:", self._po.X)
                             self.load_new_parameters(self._po.new_ff)
-                            newff_name = "newFF.offxml"
                             self.to_smirnoff_xml(newff_name, verbose=False)
                             self._po._setup.ff_fname = newff_name
                             self._po.ff_fname = newff_name
