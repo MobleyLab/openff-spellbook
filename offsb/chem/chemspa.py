@@ -2761,7 +2761,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
                         if optimize_during_typing:
                             print("Performing micro optimization for new split")
-                            newff_name = "newFF.offxml"
+                            newff_name = "optimize.offxml"
                             self.to_smirnoff_xml(newff_name, verbose=False)
                             self._po._setup.ff_fname = newff_name
                             self._po.ff_fname = newff_name
