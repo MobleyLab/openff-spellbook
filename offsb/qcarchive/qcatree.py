@@ -501,7 +501,8 @@ class QCATree(Tree.Tree):
 
         for i, j in chunks:
             kwargs["molecule"] = ids[i:j]
-            result.append(pool.apply_async(fn, None, kwargs))
+            kwargs["driver"] = "hessian"
+            result.append(pool.apply_async(fn, tuple(), kwargs))
 
         total_received = 0
         for ret in tqdm.tqdm(result, total=len(result), ncols=80, desc="Requests"):
@@ -1334,11 +1335,16 @@ class QCATree(Tree.Tree):
                 payload = mol.payload
                 for hess in hess_objs:
                     pl = hess_objs[hess]
-                    if payload == ("QCM-" + pl.molecule):
-                        hess_node = Node.Node(name="Hessian", payload=hess)
+
+                    mol_id = pl.molecule
+
+                    hess_id = "QCR-" + pl.id
+
+                    if payload == ("QCM-" + mol_id):
+                        hess_node = Node.Node(name="Hessian", payload=hess_id)
                         hess_node.state = Node.CLEAN
                         hess_node = self.add(mol.index, hess_node)
-                        self.db[hess] = DEFAULT_DB({"data": pl})
+                        self.db[hess_id] = DEFAULT_DB({"data": pl})
                         self.register_modified(hess_node, state=Node.CLEAN)
 
     def torsiondriverecord_minimum(self, tdr_nodes):
