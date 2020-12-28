@@ -12,7 +12,6 @@ import tempfile
 import numpy as np
 import simtk.unit
 import tqdm
-from QUBEKit.mod_seminario import ModSeminario
 
 import offsb.chem.types
 import offsb.op.chemper
