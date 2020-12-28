@@ -19,7 +19,7 @@ class SmilesSearchTree(Tree.PartitionTree):
     Just a quick way to get the indices and apply them to the entries
     """
 
-    def __init__(self, smiles, source_tree, name, verbose=True):
+    def __init__(self, smiles, source_tree, name, verbose=False):
         super().__init__(source_tree, name, verbose=verbose)
         self.smiles = smiles
         if hasattr(smiles, "__iter__") and (isinstance(smiles[0], str) and len(smiles[0]) == 1):
