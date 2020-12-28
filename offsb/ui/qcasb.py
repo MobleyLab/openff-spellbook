@@ -41,8 +41,8 @@ class QCArchiveSpellBook:
 
     cache_dir = "."
 
-    drop_hessians = True
-    drop_intermediates = True
+    drop_hessians = False
+    drop_intermediates = False
 
     def save(self, tree):
         name = os.path.join(self.cache_dir, tree.name + ".p")
@@ -117,6 +117,7 @@ class QCArchiveSpellBook:
 
         import pickle
 
+        self.verbose = True
         self.QCA = None
         if QCA is not None:
             if isinstance(QCA, str):
@@ -124,25 +125,31 @@ class QCArchiveSpellBook:
                 if os.path.exists(fname):
                     with open(fname, "rb") as fid:
                         self.QCA = pickle.load(fid)
+            else:
+                self.QCA = QCA
         else:
             fname = os.path.join(self.cache_dir, "QCA.p")
             if os.path.exists(fname):
                 with open(fname, "rb") as fid:
                     self.QCA = pickle.load(fid)
 
-            aux_sets = self.openff_qcarchive_datasets_bad_name
-            load_all = True
             if datasets is not None:
                 aux_sets = datasets
                 load_all = False
+            # aux_sets = self.openff_qcarchive_datasets_bad_name
 
-            self.drop = drop
-            self.load(aux_sets, load_all=load_all, start=start, limit=limit)
+                self.drop = drop
+                self.load(aux_sets, load_all=load_all, start=start, limit=limit)
         self.folder_cache = {}
 
         # If data is generated for a parameters, save the list later
         # in case we will e.g. plot them
         self._param_cache = []
+
+    @classmethod
+    def from_QCATree(cls, QCA):
+        cls = QCArchiveSpellBook(QCA=QCA)
+        return cls
 
     def _plot_kt_displacements(
         self, ax, val, delta, marker="o", color="black", label=None
@@ -1174,15 +1181,15 @@ class QCArchiveSpellBook:
 
     def assign_labels_from_openff(self, openff_name, name, targets=None):
 
-        if os.path.exists(name + ".p"):
-            return pickle.load(open(name + ".p", "rb"))
+        # if os.path.exists(name + ".p"):
+        #     return pickle.load(open(name + ".p", "rb"))
 
         from offsb.op.openforcefield import OpenForceFieldTree as OP
 
         ext = ".offxml"
         if not openff_name.endswith(ext):
             openff_name += ext
-        labeler = OP(self.QCA, name, openff_name)
+        labeler = OP(self.QCA, name, openff_name, ff_kwargs=dict(allow_cosmetic_attributes=True), verbose=self.verbose)
         labeler.apply(targets=targets)
         labeler.to_pickle()
         return labeler
@@ -1190,8 +1197,8 @@ class QCArchiveSpellBook:
     def _measure(self, smi, op_cls, name, targets=None):
         from offsb.search.smiles import SmilesSearchTree
 
-        if os.path.exists(name + ".p"):
-            return pickle.load(open(name + ".p", "rb"))
+        # if os.path.exists(name + ".p"):
+        #     return pickle.load(open(name + ".p", "rb"))
 
         # assume we want all final geometries
         if (
