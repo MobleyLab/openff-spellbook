@@ -9,8 +9,8 @@ from offsb.tools.util import flatten_list
 
 
 class GeometryOperation(offsb.treedi.tree.TreeOperation, ABC):
-    def __init__(self, source, name):
-        super().__init__(source, name)
+    def __init__(self, source, name, verbose=False):
+        super().__init__(source, name, verbose=verbose)
         self._select = "Molecule"
         self.processes = 1
 
@@ -248,7 +248,7 @@ class TorsionOperation(GeometryOperation):
         x = np.dot(v, w)
         y = np.dot(np.cross(b1, v), w)
 
-        return np.degrees(np.arctan2(y, x))
+        return np.array([np.degrees(np.arctan2(y, x))])
 
     @staticmethod
     def measure_praxeolitic(mol, idx):
