@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import offsb.ui.qcasb
+import pprint
 
 
 if __name__ == "__main__":
@@ -12,7 +13,7 @@ if __name__ == "__main__":
     parser.add_argument('--out_file_name', type=str)
     parser.add_argument('--datasets', type=str)
 
-    args = vars(parser.parse_args())
+    args = parser.parse_args()
 
     datasets = None
     if args.datasets is not None:
@@ -21,8 +22,10 @@ if __name__ == "__main__":
     obj = offsb.ui.qcasb.QCArchiveSpellBook(datasets=datasets)
 
 
+    out = args.out_file_name
     if args.out_file_name is None:
         out = args.openff_name
 
-    obj.assign_labels_from_openff(args.openff_name, out)
-
+    labeler = obj.assign_labels_from_openff(args.openff_name, out)
+    
+    pprint.pprint(labeler.db)
