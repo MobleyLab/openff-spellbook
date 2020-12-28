@@ -10,13 +10,14 @@ import sys
 
 gpermol2au = 1836
 au2amu = 1/1836.
-eig2wavenumber = 1./(2*np.pi * 137 * 5.29e-9) * np.sqrt(au2amu)
-eig2thz = eig2wavenumber * 2.99792458e10 / 1e12 
-conversion = eig2wavenumber
 kcal2hartree = 1/627.5096080306
 ang2bohr = 1/0.529177249
 bohr2angstrom = 0.529177249
 hartree2kcalmol = 627.5096080306
+# eig2wavenumber = 1.0 /(2*np.pi * 137 * 5.29e-9) * np.sqrt(au2amu)
+eig2wavenumber = 33.3564095 / (2*np.pi) 
+eig2thz = eig2wavenumber * 2.99792458e10 / 1e12 
+conversion = eig2wavenumber
 
 def load_xyz(fname):
 
@@ -42,7 +43,7 @@ CoordClass, connect, addcart = CoordSysDict[coordsys.lower()]
 Cons = None
 
 swap_internals = not connect
-debug = True
+debug = False
 
 def printortho( mat):
     if not debug:
@@ -376,25 +377,32 @@ def load_xyz_hessian_from_old( d, mol_number):
 
 def hessian_modes( hess, xyz, mass, mol_number, remove=0, stdtr=False):
 
-    convert = 1
+    # this assumes hessian in kcalmol/A^2
+    xyz = xyz * ang2bohr
+    convert =  1
     mass_mat = (np.dot(np.sqrt(mass).reshape(-1,1), np.sqrt(mass).reshape(1,-1)))
-    mass_per_atom = np.array([mass_table[atom] for atom in syms])
+    mass_per_atom = mass[:,0]
+    # hess = hess * hartree2kcalmol / bohr2angstrom**2
+    hess = hess / mass_mat * 937583.07
     # begin the analysis
-    E = np.linalg.eigh(hess / mass_mat * convert)# 
+    E = np.linalg.eigh(hess * convert)# 
+    debug = False
     if debug:
         print("freqs before removing trans/rot")
         print(np.sign(E[0])*np.sqrt(np.abs(E[0]))*conversion)
     esrt = E[0].argsort()
 
     mol_name = "mol_" + str(mol_number)
-    for i, mode in enumerate(E[1]):
-        with open(mol_name+".mode_"+str(i)+".xyz", 'w') as fid:
-            mode_to_xyz(syms, xyz, mode.reshape(-1, 3), outfd=fid, 
-                    comment=mol_name + " mode " + str(i))
-    for i, mode in enumerate(E[1]):
-        with open(mol_name+".COM.mode_"+str(i)+".xyz", 'w') as fid:
-            mode_COM_to_xyz(syms, xyz, mode.reshape(-1, 3), outfd=fid, 
-                    comment=mol_name + " COMmode " + str(i))
+    verbose = False
+    if verbose:
+        for i, mode in enumerate(E[1]):
+            with open(mol_name+".mode_"+str(i)+".xyz", 'w') as fid:
+                mode_to_xyz(syms, xyz, mode.reshape(-1, 3), outfd=fid, 
+                        comment=mol_name + " mode " + str(i))
+        for i, mode in enumerate(E[1]):
+            with open(mol_name+".COM.mode_"+str(i)+".xyz", 'w') as fid:
+                mode_COM_to_xyz(syms, xyz, mode.reshape(-1, 3), outfd=fid, 
+                        comment=mol_name + " COMmode " + str(i))
 
     if debug:
         print("INERTIA: xyz[:5] is", xyz[:5])
@@ -438,7 +446,7 @@ def hessian_modes( hess, xyz, mass, mol_number, remove=0, stdtr=False):
         
         print("D[:,0] pre qr")
         print(D[:,0])
-    testmat = (np.dot(np.dot(TR.T, hess / mass_mat), TR))
+    testmat = (np.dot(np.dot(TR.T, hess), TR))
     if debug:
         print("TESTMAT TR' * H * TR")
         for row in testmat:
@@ -461,8 +469,8 @@ def hessian_modes( hess, xyz, mass, mol_number, remove=0, stdtr=False):
 
     if debug:
         print("Q VS D DOT")
-    printortho( np.dot( Q.T, D))
-    printmat( np.dot( Q.T, D), 2)
+        printortho( np.dot( Q.T, D))
+        printmat( np.dot( Q.T, D), 2)
     #D /= np.linalg.norm( D, axis=0)
     TR = D[ :, :6]
     testmat = np.dot( TR.T, TR)
@@ -472,7 +480,7 @@ def hessian_modes( hess, xyz, mass, mol_number, remove=0, stdtr=False):
             for val in row:
                 print("{:11.8f} ".format( val), end="")
             print()
-    testmat = (np.dot(np.dot(TR.T, hess / mass_mat), TR))
+    testmat = (np.dot(np.dot(TR.T, hess), TR))
     if debug:
         print("TESTMAT")
         for row in testmat:
@@ -516,16 +524,16 @@ def hessian_modes( hess, xyz, mass, mol_number, remove=0, stdtr=False):
 
     #if D[:,0].sum() < 0:
     #    D *= -1
-    freq_ic,L = np.linalg.eigh(np.dot(np.dot(D.T, hess / mass_mat), D))
+    freq_ic,L = np.linalg.eigh(np.dot(np.dot(D.T, hess), D))
     #testmat = np.dot( np.dot( L.T, np.dot( np.dot( D.T, hess / mass_mat), D)), L)
-    testmat = np.dot( np.dot( L.T, hess / mass_mat), L)
+    testmat = np.dot( np.dot( L.T, hess), L)
     if debug:
         print("TEST L D[:10] DOT")
         for row in testmat[:10]:
             for val in row[:10]:
                 print("{:11.8f} ".format( val), end="")
             print()
-    testmat = np.dot( np.dot( D.T, hess / mass_mat), D)
+    testmat = np.dot( np.dot( D.T, hess), D)
     if debug:
         print("TEST D H D DOT FULL")
         for row in testmat[:10]:
@@ -534,15 +542,15 @@ def hessian_modes( hess, xyz, mass, mol_number, remove=0, stdtr=False):
             print()
         print("EIGS FULL:", converteig(freq_ic[:10]) )
     if not stdtr:
-        _,D = np.linalg.eigh(hess / mass_mat)
+        _,D = np.linalg.eigh(hess)
     if remove > 0:
         TR = np.array(D[:,:remove])
         D = np.array(D[:,remove:])
         if debug:
             print("TR.shape")
             print(TR.shape)
-    freq_ic,L = np.linalg.eigh(np.dot(np.dot(D.T, hess / mass_mat), D))
-    testmat = np.dot( np.dot( L.T, np.dot( np.dot( D.T, hess / mass_mat), D)), L)
+    freq_ic,L = np.linalg.eigh(np.dot(np.dot(D.T, hess), D))
+    testmat = np.dot( np.dot( L.T, np.dot( np.dot( D.T, hess), D)), L)
     if debug:
         print("AFTER REMOVE")
         print("TEST L D[:10] DOT")
@@ -552,7 +560,7 @@ def hessian_modes( hess, xyz, mass, mol_number, remove=0, stdtr=False):
             print()
     a,b = np.linalg.eigh( testmat)
     freq_mol = a
-    testmat = np.dot( np.dot( D.T, hess / mass_mat), D)
+    testmat = np.dot( np.dot( D.T, hess), D)
     if debug:
         print("EIGS LDHDL:", converteig(a))
         print("TEST D H D DOT FULL")
@@ -571,11 +579,11 @@ def hessian_modes( hess, xyz, mass, mol_number, remove=0, stdtr=False):
     if debug:
         print("S[0:21]")
         print(S[0:21])
-        print("np.dot(D.T, hess / mass_mat, D) shape")
-        print(np.dot(np.dot(D.T, hess / mass_mat), D).shape)
+        print("np.dot(D.T, hess, D) shape")
+        print(np.dot(np.dot(D.T, hess), D).shape)
 
     # Get the modes in IC, which is the transformed Hess
-    freq_ic,L = np.linalg.eigh(np.dot(np.dot(D.T, hess / mass_mat), D))
+    freq_ic,L = np.linalg.eigh(np.dot(np.dot(D.T, hess), D))
     if debug:
         print("freq_ic")
         print(np.sign(freq_ic)*np.sqrt(np.abs(freq_ic))*conversion)
@@ -589,9 +597,9 @@ def hessian_modes( hess, xyz, mass, mol_number, remove=0, stdtr=False):
         print("mol_modes.shape")
         print(mol_modes.shape)
 
-    freq_TR,Ltr = np.linalg.eigh(np.dot(np.dot(TR.T, hess / mass_mat), TR))
+    freq_TR,Ltr = np.linalg.eigh(np.dot(np.dot(TR.T, hess), TR))
     #testmat = np.dot( Ltr, TR.T)
-    testmat = np.dot( np.dot( Ltr.T, np.dot( np.dot( TR.T, hess / mass_mat), TR)), Ltr)
+    testmat = np.dot( np.dot( Ltr.T, np.dot( np.dot( TR.T, hess), TR)), Ltr)
     if debug:
         print("TEST Ltr' TR' H TR Ltr DOT (shape):", Ltr.shape, TR.shape)
         for row in testmat:
@@ -646,10 +654,11 @@ def hessian_modes( hess, xyz, mass, mol_number, remove=0, stdtr=False):
     #for i,_ in enumerate(Norm):
     #    mol_modes[:,i] /= Norm[i]
 
-    for i, mode in enumerate(mol_modes.T):
-        with open(mol_name+".mode_"+str(i)+".pure.xyz", 'w') as fid:
-            mode_to_xyz(syms, xyz, (mode).reshape(-1, 3) , outfd=fid, 
-                comment=mol_name + " mode " + str(i))
+    if verbose:
+        for i, mode in enumerate(mol_modes.T):
+            with open(mol_name+".mode_"+str(i)+".pure.xyz", 'w') as fid:
+                mode_to_xyz(syms, xyz, (mode).reshape(-1, 3) , outfd=fid, 
+                    comment=mol_name + " mode " + str(i))
 
     raw_mode = mol_modes.copy()
     for i in range( raw_mode.shape[1]):
@@ -693,11 +702,12 @@ def hessian_modes( hess, xyz, mass, mol_number, remove=0, stdtr=False):
         for i, mode in enumerate(raw_mode.T):
             print( "mode {:3d}: {:4.2e}".format( i, 
                 angular_momentum( xyz, mass_per_atom, mode)))
-            with open(mol_name+".mode_"+str(i)+".raw.xyz", 'w') as fid:
-                mode_to_xyz(syms, xyz, (mode).reshape(-1, 3) , outfd=fid, 
-                        comment=mol_name + " mode " + str(i))
+            if verbose:
+                with open(mol_name+".mode_"+str(i)+".raw.xyz", 'w') as fid:
+                    mode_to_xyz(syms, xyz, (mode).reshape(-1, 3) , outfd=fid, 
+                            comment=mol_name + " mode " + str(i))
 
-    return mol_modes, freq_ic
+    return mol_modes, converteig(freq_ic)
 
 if 1:
     angle_freq_file = open("angle_freq.txt", 'w')
