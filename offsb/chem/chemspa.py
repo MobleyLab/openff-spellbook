@@ -26,6 +26,8 @@ from openforcefield.typing.engines.smirnoff.parameters import (
     AngleHandler, BondHandler, ImproperDict, ImproperTorsionHandler,
     ParameterList, ProperTorsionHandler, ValenceDict, vdWHandler)
 
+import offsb.ui.qcasb
+
 VDW_DENOM = 10.0
 
 # some clusters may reduce this default value; we need it since our trees
@@ -330,7 +332,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
     def to_smirnoff_xml(self, output, verbose=True, renumber=False):
 
         ff = self.to_smirnoff(verbose=verbose, renumber=renumber)
-        ff.to_file(output)
+        if output:
+            ff.to_file(output)
 
     @classmethod
     def from_smirnoff_xml(cls, input, name=None, add_generics=False):
@@ -761,7 +764,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
         return cls
 
-    def split(self, label, bit):
+    def split_parameter(self, label, bit):
 
         node = list(
             [x for x in self.node_iter_depth_first(self.root()) if x.payload == label]
@@ -920,6 +923,31 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
         return bit_gradients
 
+    def _check_overlapped_parameter(self, pre, post, node):
+        parent_param = self[node.parent].payload
+        child_param = node.payload
+
+        n_pre = 0
+        for entry in pre.db.values():
+            entry = entry['data']
+            n_pre += sum([1 for ic_type in entry for atoms,lbl in entry[ic_type].items() if lbl == parent_param])
+       
+        n_post = 0
+        for entry in post.db.values():
+            entry = entry['data']
+            n_post += sum([1 for ic_type in entry for atoms,lbl in entry[ic_type].items() if lbl == parent_param]) 
+
+        n_new_post = 0
+        for entry in post.db.values():
+            entry = entry['data']
+            n_new_post += sum([1 for ic_type in entry for atoms,lbl in entry[ic_type].items() if lbl == child_param]) 
+
+        if n_pre >= 0 and n_post == 0 and n_new_post == n_pre:
+            return True
+
+        else:
+            return False
+
     def _find_next_split(
         self, param_data, key=None, ignore_bits=None, mode="sum_difference", eps=1.0
     ):
@@ -1037,15 +1065,27 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         bit_gradients = sorted(
             bit_gradients, key=lambda x: np.max(np.abs(x[2])), reverse=True
         )
+
+
+
+        QCA = self._po.source.source
+        # self.to_smirnoff_xml("tmp.offxml", verbose=False)
+        # coverage_pre = offsb.ui.qcasb.QCArchiveSpellBook(QCA=QCA).assign_labels_from_openff("tmp.offxml", "tmp.offxml")
+        # need this for measuring geometry
+        # should only need to do it once
+        
         for bit_gradient in bit_gradients:
             # split_bit = bit_gradients[0][1]
             split_bit = bit_gradient[1]
             if all([x != split_bit for x in ignore_bits]):
                 # child = group - split_bit
                 lbl = bit_gradient[0]
-                node = self.split(lbl, split_bit)
+                node = self.split_parameter(lbl, split_bit)
                 if node is None:
                     continue
+                # self.to_smirnoff_xml("tmp.offxml", verbose=False)
+                # coverage_post = offsb.ui.qcasb.QCArchiveSpellBook(QCA=QCA).assign_labels_from_openff("tmp.offxml", "tmp.offxml")
+                # overlapped = self._check_overlapped_parameter(coverage_pre, coverage_post, node)
                 ignore_bits[split_bit] = bit_gradient[2]
                 print(
                     "\n=====\nSplitting",
@@ -1071,6 +1111,13 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                     (self.db[lbl]["data"]["group"] - split_bit).to_smarts(),
                     "\n\n",
                 )
+                
+                # if overlapped:
+
+                #     print("This param occluded its parent; narrowing the parent and continuing")
+                #     coverage_pre = coverage_post
+                #     continue
+
                 # print("The parent is")
                 # print(group.drop(child))
                 # print("Smarts is")
@@ -1569,7 +1616,6 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
     def _combine_optimization_data(self):
 
         QCA = self._po.source.source
-        param_names = self._po._forcefield.plist
 
         # smi_to_label = self._po._setup.labeler.db["ROOT"]["data"]
         # smi_to_label = {
@@ -1577,7 +1623,9 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         # }
         # smi_to_label = {v: k for k, v in smi_to_label.items()}
 
+        param_names = self._po._forcefield.plist
         param_labels = [param.split("/")[-1] for param in param_names]
+        # param_labels = [x.payload for x in self.node_iter_depth_first(self.root()) if x.payload[0] in ['nbait']]
 
         # try:
         #     param_labels = [smi_to_label[param.radian("/")[-1]] for param in param_names]
@@ -2021,6 +2069,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             # print("Ignore bits are")
             # for ignore, grads in ignore_bits.items():
             #     print(grads, ignore)
+            self.to_smirnoff_xml(None, verbose=True)
             node = self._find_next_split(
                 param_data, key=key, ignore_bits=ignore_bits, mode=mode, eps=eps
             )
@@ -2067,7 +2116,9 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                         "grad",
                         grad,
                         "grad_new < grad*scale?",
-                        grad_new < grad * grad_scale,
+                        grad_new - grad * grad_scale <= -eps,
+                        grad_new - grad * grad_scale,
+                        -eps,
                     )
 
                     # current mode: take the best looking split
@@ -2075,7 +2126,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                     # break
 
                     # hard core mode: only take the one with the smaller grad
-                    if grad_new < best[1]:
+                    if grad_new - best[1] <= -eps:
                         best = [
                             node.copy(),
                             grad_new,
@@ -2112,7 +2163,12 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             # only re-add if we did a complete scan, since we terminate that case
             # with no new node, and the best has to be re-added
             # if we break early, the node is already there
-            self.add(best[2], best[0])
+            # I think nodes need to be prepended to conserve hierarchy
+            # for example, if we split a param, do we want it to override
+            # all children? no, since we were only focused on the parent, so
+            # we only care that the split node comes before *only* the parent,
+            # which is true since it is a child
+            self.add(best[2], best[0], index=0)
             self.db[best[0].payload] = best[3]
 
             print("Best split parameter")
@@ -2766,7 +2822,10 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                         if optimize_during_typing:
                             print("Performing micro optimization for new split")
                             newff_name = "optimize.offxml"
-                            self.to_smirnoff_xml(newff_name, verbose=False)
+                            self.to_smirnoff_xml(newff_name, verbose=True)
+                            self.to_smirnoff_xml(
+                                "newFF" + str(i) + ".offxml", verbose=False
+                            )
                             self._po._setup.ff_fname = newff_name
                             self._po.ff_fname = newff_name
                             self._po._init = False
@@ -2850,6 +2909,9 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                         self.node_index.pop(node.index)
                         self.db.pop(node.payload)
 
+                        # reset the physical terms after resetting the tree
+                        self.load_new_parameters(current_ff)
+
                         if optimize_during_typing:
                             ignore_bits = ignore_bits_optimized.copy()
                     else:
@@ -2869,38 +2931,38 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             print("Total drop is", obj - initial)
             self.to_smirnoff_xml(newff_name, verbose=True)
             self.to_pickle()
-            print("Splitting done; performing final optimization")
+            print("Splitting done")
 
-            while True:
-                try:
-                    self._po.load_options(
-                        options_override={
-                            "trust0": self.trust0,
-                            "finite_difference_h": self.finite_difference_h,
-                        }
-                    )
-                    self._po.apply(jobtype="OPTIMIZE")
-                    break
-                except RuntimeError:
-                    self._bump_zero_parameters(1e-1, names="epsilon")
-                    self.to_smirnoff_xml(newff_name, verbose=False)
-                    self._po._setup.ff_fname = newff_name
-                    self._po.ff_fname = newff_name
-                    self._po._init = False
-                    self.trust0 = self._po._options["trust0"] / 2.0
-                    print(
-                        "Initial optimization failed; reducing trust radius to",
-                        self.trust0,
-                    )
-                    self._po._options["trust0"] = self.trust0
-                    mintrust = self._po._options["mintrust"]
-                    if self.trust0 < mintrust:
-                        print(
-                            "Trust radius below minimum trust of {}; cannot proceed.".format(
-                                mintrust
-                            )
-                        )
-                        return
+            # while True:
+            #     try:
+            #         self._po.load_options(
+            #             options_override={
+            #                 "trust0": self.trust0,
+            #                 "finite_difference_h": self.finite_difference_h,
+            #             }
+            #         )
+            #         self._po.apply(jobtype="OPTIMIZE")
+            #         break
+            #     except RuntimeError:
+            #         self._bump_zero_parameters(1e-1, names="epsilon")
+            #         self.to_smirnoff_xml(newff_name, verbose=False)
+            #         self._po._setup.ff_fname = newff_name
+            #         self._po.ff_fname = newff_name
+            #         self._po._init = False
+            #         self.trust0 = self._po._options["trust0"] / 2.0
+            #         print(
+            #             "Initial optimization failed; reducing trust radius to",
+            #             self.trust0,
+            #         )
+            #         self._po._options["trust0"] = self.trust0
+            #         mintrust = self._po._options["mintrust"]
+            #         if self.trust0 < mintrust:
+            #             print(
+            #                 "Trust radius below minimum trust of {}; cannot proceed.".format(
+            #                     mintrust
+            #                 )
+            #             )
+            #             return
 
         if optimize_parameters:
             if not optimize_types:
@@ -2926,24 +2988,26 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                             )
                             raise
 
-            while True:
-                try:
-                    self._po.apply(jobtype="OPTIMIZE")
-                    obj = self._po.X
-                    self.trust0 = self._po._options["trust0"]
-                    break
-                except RuntimeError as e:
-                    self.trust0 = self._po._options["trust0"] / 2.0
-                    print("Optimization failed; reducing trust radius to", self.trust0)
-                    self._po._options["trust0"] = self.trust0
-                    mintrust = self._po._options["mintrust"]
-                    if self.trust0 < mintrust:
-                        print(
-                            "Trust radius below minimum trust of {}; cannot proceed.".format(
-                                mintrust
+            else:
+                print("Performing final optimization")
+                while True:
+                    try:
+                        self._po.apply(jobtype="OPTIMIZE")
+                        obj = self._po.X
+                        self.trust0 = self._po._options["trust0"]
+                        break
+                    except RuntimeError as e:
+                        self.trust0 = self._po._options["trust0"] / 2.0
+                        print("Optimization failed; reducing trust radius to", self.trust0)
+                        self._po._options["trust0"] = self.trust0
+                        mintrust = self._po._options["mintrust"]
+                        if self.trust0 < mintrust:
+                            print(
+                                "Trust radius below minimum trust of {}; cannot proceed.".format(
+                                    mintrust
+                                )
                             )
-                        )
-                        raise
+                            raise
             # Some target failed... just use the current best
 
             # FB likes to change directories
