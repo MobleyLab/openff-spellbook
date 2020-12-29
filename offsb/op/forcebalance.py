@@ -231,13 +231,18 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         for tgt, dat in self._objective.ObjDict.items():
             rec = tgt.split(".")[-1]
 
-            if tgt in "Regularization":
-                self.X += dat["x"]
+            # lets skip this since we use the unpenalized for assessing new
+            # splits, which always have a 0 penalty (until I wrote code to 
+            # incorporate the old penalty, which will be weird since usually
+            # a new parameter exists and it is unclear how to treat it
+            # if tgt in "Regularization":
+            #     self.X += dat['w'] * dat["x"]
+
             # skip known keys that we must skip
             if tgt in ["Total", "Regularization"]:
                 continue
 
-            self.X += dat["x"]
+            self.X += dat['w'] * dat["x"]
 
             if dat.get("IC", None) is not None:
 
@@ -253,16 +258,15 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
             else:
                 self.db[rec]["data"].update(dat)
 
-        # calculates the total gradient for debugging
         dv = None
         for mol in self.db.values():
             mol = mol['data']
             for k in mol:
                 if type(k) is tuple and 'dV' in mol[k]:
                     if dv is None:
-                        dv = mol[k]['dV']
+                        dv = mol['w'] * mol[k]['dV']
                     else:
-                        dv += mol[k]['dV']
+                        dv += mol['w'] * mol[k]['dV']
         self.G = np.linalg.norm(dv)
 
         # if not remote:
