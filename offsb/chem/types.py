@@ -910,51 +910,88 @@ class AtomType(ChemType):
 
         vals = self._iter_fields()
 
-        for result in vals:
-            term_list = []
+        for field in mapping:
+            term_list = set()
+            inv = False
+            for result in vals:
 
-            for field in mapping:
                 val_str = ""
                 val = result.get(field, None)
+                joiner = ","
                 if val is not None:
                     val_str = "{}{}".format(mapping[field], val)
-                    if result['inv'][field]:
+                    inv = result['inv'][field]
+                    if inv:
                         val_str = "!" + val_str
+                        joiner = ""
 
                     # hack: don't print !X0 as it is not useful right now
                     if val_str == '!X0':
                         continue
+                    if '#0' in val_str:
+                        continue
 
-                    term_list.append(val_str)
+                    term_list.add(val_str)
+            if len(term_list):
+                term = joiner.join(term_list)
+                # if inv:
+                #     term = "!("+term+")"
+                terms.append(term)
 
+
+        inv = False
+        term_list = set()
+        for result in vals:
             field = "r"
             ring_str = ""
             ring_val = result.get(field, None)
+            joiner = ","
             if ring_val is not None:
-                if not result['inv'][field]:
+                inv = result['inv'][field]
+                if inv:
+                    joiner = ""
+                if not inv:
                     ring_str = "!r" if ring_val == 0 else "r{}".format(ring_val + 2)
                 elif ring_val > 0:
                     ring_str = "!r{}".format(ring_val + 2)
                 else:
                     ring_str = "r"
-                term_list.append(ring_str)
+                # inv = result['inv'][field]
+                # ring_str = "!r" if ring_val == 0 else "r{}".format(ring_val + 2)
+                # elif ring_val > 0:
+                #     ring_str = "!r{}".format(ring_val + 2)
+                # else:
+                #     ring_str = "r"
+                term_list.add(ring_str)
 
+        if len(term_list):
+            term = joiner.join(term_list)
+            terms.append(term)
+
+        inv = False
+        term_list = set()
+        for result in vals:
+            joiner = ","
             field = "aA"
             aA = ""
             aA_val = result.get(field, None)
             if aA_val != None:
                 inv = result['inv'][field] 
+                if inv:
+                    joiner = ""
                 aA = "A" if (aA_val ^ inv) == 0 else "a"
-                term_list.append(aA)
+                # aA = "a" if aA_val else "A"
+                term_list.add(aA)
 
-            term = "".join(term_list)
+        if len(term_list):
+            term = joiner.join(term_list)
             terms.append(term)
 
         if tag is True:
             tag = 1
         tag = "" if tag is None else ":" + str(int(tag))
         if len(terms) > 0:
-            smarts = ",".join(terms)
+            smarts = ";".join(terms)
         else:
             smarts = "*"
         if len(smarts) == 0:
@@ -1296,17 +1333,11 @@ class BondType(ChemType):
 
         vals = self._iter_fields()
 
+        # bond order 
+        bond = ""
+        joiner = ","
+        term_list = set()
         for result in vals:
-            term_list = []
-
-            aA = ""
-            aA_val = result.get("aA", None)
-            if aA_val is not None:
-                inv = result['inv']["aA"] 
-                aA = "!@" if (aA_val ^ inv) == 0 else "@"
-                term_list.append(aA)
-
-            bond = ""
             bond_val = result.get("Order", None)
             if bond_val is not None:
 
@@ -1320,14 +1351,34 @@ class BondType(ChemType):
                 bond = bond_lookup[bond_val]
                 if inv:
                     bond = "!" + bond
-                term_list.append(bond)
+                    joiner = ""
+                term_list.add(bond)
 
-            term = "&".join(term_list)
+        if len(term_list):
+            term = joiner.join(term_list)
+            terms.append(term)
+
+        # in a ring?
+        term_list = set()
+        joiner = ","
+        for result in vals:
+
+            aA = ""
+            aA_val = result.get("aA", None)
+            if aA_val is not None:
+                inv = result['inv']["aA"] 
+                aA = "!@" if (aA_val ^ inv) == 0 else "@"
+                term_list.add(aA)
+                if inv:
+                    joiner = ""
+
+        if len(term_list):
+            term = joiner.join(term_list)
             terms.append(term)
 
         smarts = "~"
         if len(terms) > 0:
-            smarts = ",".join(terms)
+            smarts = ";".join(terms)
 
         return smarts
 
