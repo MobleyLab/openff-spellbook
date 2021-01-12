@@ -40,4 +40,21 @@ def test_negated_bond():
 
     # assert smarts == '[!#1;!H1!H0;!X1;!r5!r4!r3;A:1]'
 
-test_negated_bond()
+def test_smarts():
+
+    s = "[#1;X1:1]-[#6;H3;X4:2]"
+    a = offsb.chem.types.BondGraph.from_string(s, sorted=False)
+    s = "[#6;H2;X4:1]-[#1;X1:2]"
+    b = offsb.chem.types.BondGraph.from_string(s, sorted=False)
+
+    c = offsb.chem.types.BondGraph()
+    c._atom1._symbol[1] = True
+
+    print("subtract", c)
+    print("a", a)
+    print(a - c, "good?", a & c == c, "contains?", c in a)
+    print("b", b)
+    print(b - c, "good?", b & c == c, "contains?", c in b)
+
+
+test_smarts()
