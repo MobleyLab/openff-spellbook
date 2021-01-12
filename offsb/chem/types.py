@@ -44,7 +44,7 @@ class BitVec:
             if not maxbits:
                 return np.inf
             elif self.maxbits >= len(self):
-                return  self.maxbits - self._v.sum()
+                return self.maxbits - self._v.sum()
             else:
                 return len(self) - self._v.sum()
         return self._v.sum()
@@ -65,7 +65,35 @@ class BitVec:
             yield b
 
     def __getitem__(self, i):
-        if i >= self._v.shape[0]:
+
+        if isinstance(i, slice):
+
+            if i.stop is None and i.start is None and i.step is None:
+                return self._v ^ self.inv
+
+            start = 0 if i.start is None else i.start
+            # end = max(self._v.shape[0] if i.stop is None else i.stop, start)
+            end = i.stop
+
+            if end is None:
+                end = self.maxbits
+
+            if np.isinf(end):
+                raise IndexError("Cannot supply an infinite length array (input slice had no bounds and maxbits was inf)")
+
+            step = 1 if i.step is None else i.step
+
+            if start >= self._v.shape[0]:
+                diff = (end - start + 1) // step
+                return np.full((diff,), self.inv, dtype=np.bool)
+
+            if end > self._v.shape[0]:
+                diff = (end - self._v.shape[0]) // step
+                return np.concatenate((self._v[start:end:step] ^ self.inv, np.full((diff,), self.inv, dtype=np.bool)))
+
+            return self._v[start:end:step] ^ self.inv
+
+        elif i >= self._v.shape[0]:
             return self.inv
         else:
             return self._v[i] ^ self._inv
@@ -102,7 +130,7 @@ class BitVec:
                 # self._v[start:][:] = self.inv ^ v
                 self._inv = not self._inv
             for j in range(start, end, step):
-                self._v[j] = self.inv ^ v 
+                self._v[j] = self.inv ^ v
 
         elif isinstance(i, int):
             if i >= self._v.shape[0]:
@@ -170,7 +198,7 @@ class BitVec:
             2 ** b for b, i in enumerate(self._v) if i
         ]  # np.packbits(self._v), dtype=np.int32)
         # print("reduce for me is", ret, self._v)
-        ret = np.sum(ret, dtype=int)
+        ret = np.sum(ret, dtype=np.int64)
         if self.inv:
             ret = -ret
         return ret
@@ -181,12 +209,12 @@ class BitVec:
         pairs = list(it.zip_longest(self.v, o.v, fillvalue=False))
         pairs = np.vstack(([(self.inv, o.inv)], pairs))
 
-        suma = np.sum([
-            2 ** b for b, i in enumerate(pairs) if (i[0])
-        ], dtype=int)  # np.packbits(self._v), dtype=np.int32)
-        sumb = np.sum([
-            2 ** b for b, i in enumerate(pairs) if (i[1])
-        ], dtype=int)  # np.packbits(self._v), dtype=np.int32)
+        suma = np.sum(
+            [2 ** b for b, i in enumerate(pairs) if (i[0])], dtype=int
+        )  # np.packbits(self._v), dtype=np.int32)
+        sumb = np.sum(
+            [2 ** b for b, i in enumerate(pairs) if (i[1])], dtype=int
+        )  # np.packbits(self._v), dtype=np.int32)
 
         # suma, sumb = np.packbits(pairs, axis=0).sum(axis=0, dtype=np.int32)
         return suma, sumb
@@ -241,7 +269,7 @@ class BitVec:
         return BitVec(a, inv, maxbits=maxbits)
 
     def __hash__(self):
-        val = int(self.reduce())
+        val = (tuple(self._v), self.inv)
         # print("hash for this bitvec is", val, self)
         return hash(val)
 
@@ -330,7 +358,7 @@ class ChemType(abc.ABC):
             for bit in me:
                 bv += bit
                 setattr(blank, field, bv)
-                yield blank
+                yield blank.copy()
                 bv -= bit
                 setattr(blank, field, bv)
 
@@ -348,7 +376,7 @@ class ChemType(abc.ABC):
 
             # This check is weird if there are negations since we don't limit
             # to maxbits anymore
-            if all(ret): #and self.is_valid(self.from_ints(dat)):
+            if all(ret):  # and self.is_valid(self.from_ints(dat)):
                 yield pos.copy()
             return
             # return [field[i] for field,i in zip(fields,pos)]
@@ -384,7 +412,7 @@ class ChemType(abc.ABC):
 
         for result in self._recurse_fields(fields, pos=[]):
             prim = {name: x for name, x in zip(fields, result)}
-            prim['inv'] = inverse
+            prim["inv"] = inverse
             vals.append(prim)
         # vals = [{name:x for result in )}
 
@@ -431,8 +459,7 @@ class ChemType(abc.ABC):
         return False
 
     def bits(self, maxbits=False):
-        """
-        """
+        """"""
 
         bits = 0
         for name in self._fields:
@@ -463,7 +490,7 @@ class ChemType(abc.ABC):
         return cls
 
     @classmethod
-    def from_string(cls, string):
+    def from_string(cls, string, sorted=False):
         """"""
         return cls.parse_string(string)
 
@@ -594,8 +621,26 @@ class ChemType(abc.ABC):
         # to the wrong atom
         self._check_sane_compare(o)
 
+        # do some potentially wicky wacky magic to make downstream easier
+        # o is in self but they are misordered, we would potentially miss
+        # the more logical calculation
+
+        # for example, if we have a 01 10 and a 01 01 and we substract 01 00,
+        # then we mean to take select the second, but would be missed without
+        # explicitly checking. Thus, as a compromised, try to flip things
+        # if its not found the first time. Note that this will probably lead
+        # to some complicated situations when manipulations become more complex
+
+        pairs = zip(self._fields, o._fields)
+
+        # this means o is not aligned with self, so we try to get a better
+        # alignment by flipping it
+        if self & o != o and self._symmetric and o._symmetric:
+            # TODO get this working for impropers
+            pairs = zip(self._fields, o._fields[::-1])
+
         ret = []
-        for field_a, field_b in zip(self._fields, o._fields):
+        for field_a, field_b in pairs:
             a_vec = getattr(self, field_a)
             b_vec = getattr(o, field_b)
             ret.append(a_vec & (a_vec ^ b_vec))
@@ -632,7 +677,9 @@ class ChemType(abc.ABC):
     def __hash__(self):
         fields = tuple([hash(getattr(self, field)) for field in self._fields])
         if self._symmetric:
-            swapped = tuple([hash(getattr(self, field)) for field in self._fields[::-1]])
+            swapped = tuple(
+                [hash(getattr(self, field)) for field in self._fields[::-1]]
+            )
             return max(hash(fields), hash(swapped))
 
         # print("For type", type(self), "fields is", fields, self._fields)
@@ -797,12 +844,12 @@ class AtomType(ChemType):
         for atom in atoms:
 
             # these can be safely removed, since they are always impied??
-            atom = atom.replace(';','')
+            atom = atom.replace(";", "")
             # The symbol number
             pat = re.compile(r"(!?)#([1-9][0-9]*)")
             ret = pat.search(atom)
             symbol = BitVec()
-            symbol.maxbits = 256  
+            symbol.maxbits = 256
             if ret:
                 symbol[int(ret.group(2))] = True
                 if ret.group(1) == "!":
@@ -884,9 +931,26 @@ class AtomType(ChemType):
             elif unspecified_matches_all:
                 aA[:] = True
 
+            # sanitize: assume hydrogen is a single bonded atom
+            if symbol[1] and not any(symbol[2:]):
+                H[0] = True
+                H[1:] = False
+
+                X[0] = False
+                X[2:] = False
+
+                x[2:] = False
+
+                r[1:] = False
+
+                aA[:] = False
+                aA[0] = True
+
             self += self.from_data(symbol, H, X, x, r, aA)
 
         ATOM_UNIVERSE += self
+
+
         return self
 
     def __repr__(self):
@@ -920,15 +984,15 @@ class AtomType(ChemType):
                 joiner = ","
                 if val is not None:
                     val_str = "{}{}".format(mapping[field], val)
-                    inv = result['inv'][field]
+                    inv = result["inv"][field]
                     if inv:
                         val_str = "!" + val_str
                         joiner = ""
 
                     # hack: don't print !X0 as it is not useful right now
-                    if val_str == '!X0':
+                    if val_str == "!X0":
                         continue
-                    if '#0' in val_str:
+                    if "#0" in val_str:
                         continue
 
                     term_list.add(val_str)
@@ -938,7 +1002,6 @@ class AtomType(ChemType):
                 #     term = "!("+term+")"
                 terms.append(term)
 
-
         inv = False
         term_list = set()
         for result in vals:
@@ -947,7 +1010,7 @@ class AtomType(ChemType):
             ring_val = result.get(field, None)
             joiner = ","
             if ring_val is not None:
-                inv = result['inv'][field]
+                inv = result["inv"][field]
                 if inv:
                     joiner = ""
                 if not inv:
@@ -976,7 +1039,7 @@ class AtomType(ChemType):
             aA = ""
             aA_val = result.get(field, None)
             if aA_val != None:
-                inv = result['inv'][field] 
+                inv = result["inv"][field]
                 if inv:
                     joiner = ""
                 aA = "A" if (aA_val ^ inv) == 0 else "a"
@@ -1040,6 +1103,7 @@ class AtomType(ChemType):
 
         # Everything else is acceptable?
         return not self.is_null()
+
 
 def next_bond_def(atom: AtomType, fix=None) -> AtomType:
     """
@@ -1288,7 +1352,6 @@ class BondType(ChemType):
                 if aA.reduce() == 0 and unspecified_matches_all:
                     aA[:] = True
 
-
             else:  # nothing always means single bond, any aromaticity
                 order[1] = True
                 aA[:] = True
@@ -1333,7 +1396,7 @@ class BondType(ChemType):
 
         vals = self._iter_fields()
 
-        # bond order 
+        # bond order
         bond = ""
         joiner = ","
         term_list = set()
@@ -1344,7 +1407,7 @@ class BondType(ChemType):
                 # Just in case, if the 0 bit is on (no bond), skip it
                 # If we actually want to have no bond, we have failed upstream
                 # since we shouldn't have tried to call this on a bond
-                inv = result['inv']["Order"] 
+                inv = result["inv"]["Order"]
                 if bond_val == 0:
                     continue
 
@@ -1366,7 +1429,7 @@ class BondType(ChemType):
             aA = ""
             aA_val = result.get("aA", None)
             if aA_val is not None:
-                inv = result['inv']["aA"] 
+                inv = result["inv"]["aA"]
                 aA = "!@" if (aA_val ^ inv) == 0 else "@"
                 term_list.add(aA)
                 if inv:
@@ -1452,8 +1515,8 @@ class ChemGraph(ChemType, abc.ABC):
         return smarts
 
     @classmethod
-    def from_string(cls, string):
-        return cls._split_string(string)
+    def from_string(cls, string, sorted=False):
+        return cls._split_string(string, sorted=sorted)
 
     @classmethod
     def _smirks_splitter(cls, smirks, atoms):
@@ -1491,6 +1554,7 @@ class ChemGraph(ChemType, abc.ABC):
 
     def __and__(self, o):
         # bitwise and (intersection)
+
         self._check_sane_compare(o)
         ret_fields = []
         for field_a, field_b in zip(self._fields, o._fields):
@@ -1574,7 +1638,7 @@ class ChemGraph(ChemType, abc.ABC):
 
 
 class BondGroup(ChemGraph):
-    def __init__(self, atom1=None, bond=None, atom2=None):
+    def __init__(self, atom1=None, bond=None, atom2=None, sorted=False):
         if atom1 is None:
             atom1 = AtomType()
         if bond is None:
@@ -1594,7 +1658,7 @@ class BondGroup(ChemGraph):
         return cls(atom1, bond, atom2)
 
     @classmethod
-    def from_string_list(cls, string_list):
+    def from_string_list(cls, string_list, sorted=False):
 
         atom1 = AtomType.from_string(string_list[0])
         bond1 = BondType.from_string(string_list[1])
@@ -1606,12 +1670,12 @@ class BondGroup(ChemGraph):
         if len(string_list) == 4:
             raise ValueError("Too many values to unpack, expected 2 or 3")
 
-        return cls(atom1, bond1, atom2)
+        return cls(atom1, bond1, atom2, sorted=False)
 
     @classmethod
-    def _split_string(cls, string):
+    def _split_string(cls, string, sorted=False):
         tokens = cls._smirks_splitter(string, atoms=2)
-        return cls.from_string_list(tokens)
+        return cls.from_string_list(tokens, sorted=sorted)
 
     def to_smarts(self, tag=True):
 
@@ -1732,7 +1796,7 @@ class BondGroup(ChemGraph):
 
 
 class BondGraph(ChemGraph):
-    def __init__(self, atom1=None, bond=None, atom2=None):
+    def __init__(self, atom1=None, bond=None, atom2=None, sorted=False):
         if atom1 is None:
             atom1 = AtomType()
         if bond is None:
@@ -1747,8 +1811,8 @@ class BondGraph(ChemGraph):
         self._atom2 = atom2
         self._fields = ["_atom1", "_bond", "_atom2"]
 
-        # if atom2 < atom1:
-        #     self._fields = self._fields[::-1]
+        if sorted and atom2 < atom1:
+            atom2, atom1 = atom1, atom2
 
         super().__init__()
 
@@ -1759,18 +1823,20 @@ class BondGraph(ChemGraph):
         return cls(atom1, bond, atom2)
 
     @classmethod
-    def from_string_list(cls, string_list):
+    def from_string_list(cls, string_list, sorted=False):
         atom1 = AtomType.from_string(string_list[0])
         bond1 = BondType.from_string(string_list[1])
         atom2 = AtomType.from_string(string_list[2])
         if len(string_list) > 3:
-            raise NotImplementedError("The SMARTS pattern supplied has not been implemented")
-        return cls(atom1, bond1, atom2)
+            raise NotImplementedError(
+                "The SMARTS pattern supplied has not been implemented"
+            )
+        return cls(atom1, bond1, atom2, sorted=sorted)
 
     @classmethod
-    def _split_string(cls, string):
+    def _split_string(cls, string, sorted=False):
         tokens = cls._smirks_splitter(string, atoms=2)
-        return cls.from_string_list(tokens)
+        return cls.from_string_list(tokens, sorted=sorted)
 
     def compiled_smarts(self):
         """
@@ -1894,7 +1960,7 @@ class BondGraph(ChemGraph):
 
 
 class AngleGroup(ChemGraph):
-    def __init__(self, atom1=None, bond1=None, atom2=None, bond2=None, atom3=None):
+    def __init__(self, atom1=None, bond1=None, atom2=None, bond2=None, atom3=None, sorted=False):
         if atom1 is None:
             atom1 = AtomType()
         if bond1 is None:
@@ -1917,7 +1983,7 @@ class AngleGroup(ChemGraph):
         return cls(atom1, bond1, atom2, bond2, atom3)
 
     @classmethod
-    def from_string_list(cls, string_list):
+    def from_string_list(cls, string_list, sorted=False):
         atom1 = AtomType.from_string(string_list[0])
         bond1 = BondType.from_string(string_list[1])
         atom2 = AtomType.from_string(string_list[2])
@@ -1927,13 +1993,15 @@ class AngleGroup(ChemGraph):
             bond2 = BondType.from_string(string_list[3])
             atom3 = AtomType.from_string(string_list[4])
         if len(string_list) > 5:
-            raise NotImplementedError("The SMARTS pattern supplied has not been implemented")
-        return cls(atom1, bond1, atom2, bond2, atom3)
+            raise NotImplementedError(
+                "The SMARTS pattern supplied has not been implemented"
+            )
+        return cls(atom1, bond1, atom2, bond2, atom3, sorted=False)
 
     @classmethod
-    def _split_string(cls, string):
+    def _split_string(cls, string, sorted=False):
         tokens = cls._smirks_splitter(string, atoms=3)
-        return cls.from_string_list(tokens)
+        return cls.from_string_list(tokens, sorted=sorted)
 
     def __repr__(self):
         return (
@@ -2011,7 +2079,9 @@ class AngleGroup(ChemGraph):
 
 
 class AngleGraph(ChemGraph):
-    def __init__(self, atom1=None, bond1=None, atom2=None, bond2=None, atom3=None):
+    def __init__(
+        self, atom1=None, bond1=None, atom2=None, bond2=None, atom3=None, sorted=False
+    ):
         if atom1 is None:
             atom1 = AtomType()
         if bond1 is None:
@@ -2029,8 +2099,8 @@ class AngleGraph(ChemGraph):
         self._atom3 = atom3
         self._fields = ["_atom1", "_bond1", "_atom2", "_bond2", "_atom3"]
 
-        # if atom3 < atom1:
-        #     self._fields = self._fields[::-1]
+        if sorted and atom3 < atom1:
+            atom1, atom3 = atom3, atom1
 
         super().__init__()
 
@@ -2041,20 +2111,22 @@ class AngleGraph(ChemGraph):
         return cls(atom1, bond1, atom2, bond2, atom3)
 
     @classmethod
-    def from_string_list(cls, string_list):
+    def from_string_list(cls, string_list, sorted=False):
         atom1 = AtomType.from_string(string_list[0])
         bond1 = BondType.from_string(string_list[1])
         atom2 = AtomType.from_string(string_list[2])
         bond2 = BondType.from_string(string_list[3])
         atom3 = AtomType.from_string(string_list[4])
         if len(string_list) > 5:
-            raise NotImplementedError("The SMARTS pattern supplied has not been implemented")
-        return cls(atom1, bond1, atom2, bond2, atom3)
+            raise NotImplementedError(
+                "The SMARTS pattern supplied has not been implemented"
+            )
+        return cls(atom1, bond1, atom2, bond2, atom3, sorted=sorted)
 
     @classmethod
-    def _split_string(cls, string):
+    def _split_string(cls, string, sorted=False):
         tokens = cls._smirks_splitter(string, atoms=3)
-        return cls.from_string_list(tokens)
+        return cls.from_string_list(tokens, sorted=sorted)
 
     def __repr__(self):
         return (
@@ -2135,7 +2207,19 @@ class DihedralGraph(ChemGraph):
         atom3=None,
         bond3=None,
         atom4=None,
+        sorted=False,
     ):
+
+        if sorted and atom4 < atom1:
+            atom1, bond1, atom2, bond2, atom3, bond3, atom4 = (
+                atom4,
+                bond3,
+                atom3,
+                bond2,
+                atom2,
+                bond1,
+                atom1,
+            )
 
         if atom1 is None:
             atom1 = AtomType()
@@ -2168,10 +2252,6 @@ class DihedralGraph(ChemGraph):
             "_atom4",
         ]
 
-        # if atom4 < atom1:
-        #     self._fields = self._fields[::-1]
-
-
         super().__init__()
 
         self._symmetric = True
@@ -2189,7 +2269,7 @@ class DihedralGraph(ChemGraph):
         return cls(atom1, bond1, atom2, bond2, atom3, bond3, atom4)
 
     @classmethod
-    def from_string_list(cls, string_list):
+    def from_string_list(cls, string_list, sorted=False):
         atom1 = AtomType.from_string(string_list[0])
         bond1 = BondType.from_string(string_list[1])
         atom2 = AtomType.from_string(string_list[2])
@@ -2198,13 +2278,15 @@ class DihedralGraph(ChemGraph):
         bond3 = BondType.from_string(string_list[5])
         atom4 = AtomType.from_string(string_list[6])
         if len(string_list) > 7:
-            raise NotImplementedError("The SMARTS pattern supplied has not been implemented")
-        return cls(atom1, bond1, atom2, bond2, atom3, bond3, atom4)
+            raise NotImplementedError(
+                "The SMARTS pattern supplied has not been implemented"
+            )
+        return cls(atom1, bond1, atom2, bond2, atom3, bond3, atom4, sorted=sorted)
 
     @classmethod
-    def _split_string(cls, string):
+    def _split_string(cls, string, sorted=False):
         tokens = cls._smirks_splitter(string, atoms=4)
-        return cls.from_string_list(tokens)
+        return cls.from_string_list(tokens, sorted=sorted)
 
 
 class DihedralGroup(ChemGraph, abc.ABC):
@@ -2217,6 +2299,7 @@ class DihedralGroup(ChemGraph, abc.ABC):
         atom3=None,
         bond3=None,
         atom4=None,
+        sorted=False,
     ):
 
         if atom1 is None:
@@ -2262,7 +2345,7 @@ class DihedralGroup(ChemGraph, abc.ABC):
         return cls(atom1, bond1, atom2, bond2, atom3, bond3, atom4)
 
     @classmethod
-    def from_string_list(cls, string_list):
+    def from_string_list(cls, string_list, sorted=False):
         atom1 = AtomType.from_string(string_list[0])
         bond1 = BondType.from_string(string_list[1])
         atom2 = AtomType.from_string(string_list[2])
@@ -2274,13 +2357,15 @@ class DihedralGroup(ChemGraph, abc.ABC):
             bond3 = BondType.from_string(string_list[5])
             atom4 = AtomType.from_string(string_list[6])
         if len(string_list) > 7:
-            raise NotImplementedError("The SMARTS pattern supplied has not been implemented")
-        return cls(atom1, bond1, atom2, bond2, atom3, bond3, atom4)
+            raise NotImplementedError(
+                "The SMARTS pattern supplied has not been implemented"
+            )
+        return cls(atom1, bond1, atom2, bond2, atom3, bond3, atom4, sorted=False)
 
     @classmethod
-    def _split_string(cls, string):
+    def _split_string(cls, string, sorted=False):
         tokens = cls._smirks_splitter(string, atoms=4)
-        return cls.from_string_list(tokens)
+        return cls.from_string_list(tokens, sorted=sorted)
 
     def __contains__(self, o):
 
@@ -2444,7 +2529,70 @@ class OutOfPlaneGraph(DihedralGraph):
         atom3=None,
         bond3=None,
         atom4=None,
+        sorted=False
     ):
+        if sorted:
+            if atom1 <= atom3 and atom3 <= atom4:
+                atom1, bond1, atom2, bond2, atom3, bond3, atom4 = (
+                    atom1,
+                    bond1,
+                    atom2,
+                    bond2,
+                    atom3,
+                    bond3,
+                    atom4,
+                )
+            elif atom1 <= atom3 and atom4 <= atom3:
+                atom1, bond1, atom2, bond2, atom3, bond3, atom4 = (
+                    atom1,
+                    bond1,
+                    atom2,
+                    bond3,
+                    atom4,
+                    bond2,
+                    atom3,
+                )
+            elif atom3 <= atom1 and atom1 <= atom1:
+                atom1, bond1, atom2, bond2, atom3, bond3, atom4 = (
+                    atom3,
+                    bond2,
+                    atom2,
+                    bond1,
+                    atom1,
+                    bond3,
+                    atom4,
+                )
+            elif atom3 <= atom4 and atom4 <= atom1:
+                atom1, bond1, atom2, bond2, atom3, bond3, atom4 = (
+                    atom3,
+                    bond2,
+                    atom2,
+                    bond3,
+                    atom4,
+                    bond1,
+                    atom1,
+                )
+            elif atom4 <= atom1 and atom1 <= atom3:
+                atom1, bond1, atom2, bond2, atom3, bond3, atom4 = (
+                    atom4,
+                    bond3,
+                    atom2,
+                    bond1,
+                    atom1,
+                    bond2,
+                    atom3,
+                )
+            else:
+                atom1, bond1, atom2, bond2, atom3, bond3, atom4 = (
+                    atom4,
+                    bond3,
+                    atom2,
+                    bond2,
+                    atom3,
+                    bond1,
+                    atom1,
+                )
+
         super().__init__(
             atom1=atom1,
             bond1=bond1,
