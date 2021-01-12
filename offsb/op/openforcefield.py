@@ -37,6 +37,8 @@ class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
         # This tree operates on entries
         self._select = "Entry"
 
+        self._exception_on_unassigned = True
+
         if ff_kwargs is None:
             ff_kwargs = {}
 
@@ -109,6 +111,9 @@ class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
 
         # labels = self.source.db[target.payload]["data"]
         entry = self.source.source.db[target.payload]["data"]
+
+        # if target.payload == 'QCE.296-ccc(c)c-0':
+        #     breakpoint
 
         out_str = ""
 
@@ -287,7 +292,11 @@ class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
                 # atoms, e.g. impropers
 
                 out_dict[key][mask] = None
-                continue
+                if self._exception_on_unassigned:
+                    breakpoint()
+                    raise Exception("Could not assign parameter for key {} mask {}".format(key, mask))
+                else:
+                    continue
 
             out_dict[key][mask] = val.id
 
@@ -470,7 +479,8 @@ class OpenForceFieldTorsionTree(OpenForceFieldTreeBase):
             is_interpolated = parameter.k_bondorder is not None
 
         if spatial:
-            parameterize_str_lst.append(",".join(["phase" + str(i) for i in n_terms]))
+            print("Warning, phase skipped due to hardcoding")
+            # parameterize_str_lst.append(",".join(["phase" + str(i) for i in n_terms]))
         if force:
             if is_interpolated:
                 for i in n_terms:
@@ -500,6 +510,8 @@ class OpenForceFieldImproperTorsionTree(OpenForceFieldTreeBase):
 
         super().__init__(source_tree, name, filename, ff_kwargs=ff_kwargs)
 
+        self._exception_on_unassigned = False
+
     def parse_labels(self):
         pass
 
@@ -515,7 +527,8 @@ class OpenForceFieldImproperTorsionTree(OpenForceFieldTreeBase):
             is_interpolated = parameter.k_bondorder is not None
 
         if spatial:
-            parameterize_str_lst.append(",".join(["phase" + str(i) for i in n_terms]))
+            print("Warning, phase skipped due to hardcoding")
+            # parameterize_str_lst.append(",".join(["phase" + str(i) for i in n_terms]))
         if force:
             if is_interpolated:
                 for i in n_terms:
@@ -640,6 +653,9 @@ class OpenForceFieldTree(OpenForceFieldTreeBase):
         out_str = ""
         all_labels = DEFAULT_DB()
         out_dict = DEFAULT_DB()
+
+        # if target.payload == 'QCE.296-ccc(c)c-0':
+        #     breakpoint()
 
         smi = kwargs["smi"]
 
