@@ -227,6 +227,8 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         fb_logger.setLevel(logging.INFO)
         ans = optimizer.Run()
 
+        best = optimizer.BestChk
+
         self.X = 0
         for tgt, dat in self._objective.ObjDict.items():
             rec = tgt.split(".")[-1]
@@ -244,7 +246,8 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
 
             self.X += dat['w'] * dat["x"]
 
-            if dat.get("IC", None) is not None:
+            IC = dat.get("IC", None)
+            if IC is not None:
 
                 IC = dat["IC"][rec]
                 # node = [ x for x in QCA.node_iter_depth_first(QCA.root()) if x.payload == rec ][0]
@@ -258,6 +261,9 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
             else:
                 self.db[rec]["data"].update(dat)
 
+        # might be safer?
+        self.X = best['X']
+
         dv = None
         for mol in self.db.values():
             mol = mol['data']
@@ -267,7 +273,9 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
                         dv = mol['w'] * mol[k]['dV']
                     else:
                         dv += mol['w'] * mol[k]['dV']
-        self.G = np.linalg.norm(dv)
+
+        # also safer since above only works for optgeo at the moment
+        self.G = np.linalg.norm(best['G'])
 
         # if not remote:
         #     super().apply(self._select, targets=targets)
@@ -324,9 +332,12 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
             if os.path.exists(fname):
                 os.remove(fname)
 
-    def _generate_ic_objective_pairs(self, IC_dict, ans, i=0):
+    def _generate_ic_objective_pairs(self, IC_dict, ans, i=None):
 
         ret = {}
+
+        if i is None:
+            i = 0
 
         IC = [
             ic
@@ -573,6 +584,7 @@ class ForceBalanceObjectiveTorsionDriveSetup(offsb.treedi.tree.TreeOperation):
         kwargs["global"] = self.fb_main_opts
         kwargs["mol"] = ref_mol
         kwargs["metadata"] = metadata
+        kwargs["map_inv"] = map_inv
 
         return kwargs
 
@@ -795,8 +807,8 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
             + "\n$target"
             + "\nname {:s}"
             + "\ntype OptGeoTarget_SMIRNOFF"
-            + "\nweight {:8.6f}"
-            + "\nwritelevel 0"
+            + "\nweight {:16.13f}"
+            + "\nwritelevel 2"
             + "\nremote 1"
             + "\n$end"
         )
@@ -821,8 +833,8 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
             + "\n$target"
             + "\nname {:s}"
             + "\ntype AbInitio_SMIRNOFF"
-            + "\nweight {:8.6f}"
-            + "\nwritelevel 0"
+            + "\nweight {:16.13f}"
+            + "\nwritelevel 2"
             + "\nremote 1"
             + "\nforce true"
             + "\nenergy true"
@@ -838,6 +850,7 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
             + "\n$target"
             + "\nname {:s}"
             + "\ntype VIBRATION_SMIRNOFF"
+            + "\nwritelevel 2"
             + "\ncoords mol.pdb"
             + "\npdb mol.pdb"
             + "\nmol2 mol.sdf"
@@ -872,7 +885,14 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
                     if ext not in v:
                         continue
                     out_str = v[ext]
-                    with open(path + "." + ext, "w") as f:
+
+                    # Workaround so that xyz is considered a trajectory,
+                    # but others like pdb is a topology with only one snap
+                    if ext == 'xyz':
+                        mode = 'a'
+                    else:
+                        mode = 'w'
+                    with open(path + "." + ext, mode) as f:
                         f.write(out_str)
                 if v.get("local", None) is not None:
                     path = os.path.join(dir, v["local_fnm"])
@@ -933,16 +953,31 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
         cwd = []
         i = 0
 
-
         mass_table = offsb.dev.hessian.mass_table
 
+        map_inv = None
+
         for opt_node in QCA.node_iter_depth_first(target, select="Optimization"):
+            job = 0
             for mol_node in QCA.node_iter_depth_first(opt_node, select="Molecule"):
                 # grad_node = QCA[mol_node.parent]
+
                 opt = QCA.db[opt_node.payload]["data"]
                 traj = opt.trajectory
                 qcid = mol_node.payload.split("-")[1]
                 grad_id = QCA[mol_node.parent].payload.split("-")[1]
+
+                if map_inv is None:
+                    ref_mol = QCA.db[mol_node.payload]["data"]
+                    mol = offsb.rdutil.mol.rdmol_from_smiles_and_qcmol(smi, ref_mol)
+
+                    map_idx = offsb.rdutil.mol.atom_map(mol)
+                    map_inv = offsb.rdutil.mol.atom_map_invert(map_idx)
+
+                    del ref_mol
+                    del mol
+                    del map_idx
+
                 if qcid == opt.initial_molecule:
                     continue
                 i = traj.index(grad_id)
@@ -955,19 +990,31 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
                 cwd.append(opt_node.payload + "." + mol_node.payload)
                 grad_node = QCA[mol_node.parent]
                 if self._abinitio:
-                    dir = "targets/AI." + cwd[-1]
+                    #combine all snaps into a single target.. needed for energy matching
+                    dir = "targets/AI." + opt_node.payload
 
                     try:
                         os.mkdir(dir)
                     except FileExistsError:
                         pass
-                    fid = open(os.path.join(dir, "qdata.txt"), "w")
+                    fid = open(os.path.join(dir, "qdata.txt"), "a")
+                    fid.write("JOB {:d}\n".format(job))
+                    job += 1
+                    xyz = [qcmol.geometry[i] for i in map_inv]
+                    xyz = offsb.tools.util.flatten_list(xyz)
+                    fid.write("COORDS")
+                    for x in xyz:
+                        fid.write(" {:16.12f}".format(x * offsb.tools.const.bohr2angstrom))
+                    fid.write("\n")
                     fid.write("ENERGY {:16.12f}\n".format(energy))
                     if not "Stub" in grad_node.name:
                         gradient = QCA.db[grad_node.payload]["data"].return_result
                         fid.write("GRADIENT")
-                        for g in offsb.tools.util.flatten_list(gradient):
-                            fid.write(" {:16.12f}".format(g))
+                        gradient = [gradient[i] for i in map_inv]
+                        gradient = offsb.tools.util.flatten_list(gradient)
+                        for g in gradient:
+                            # the documentation says it should be in au, but these differ by a factor of 1000 compared to MM? So I assume they are in kcal or kj.. kcal matches closer but fb says everything is kJ.. both work out
+                            fid.write(" {:16.12f}".format(g*offsb.tools.const.hartree2kjmol))
                         fid.write("\n")
                     fid.close()
                 if self._vibration:
@@ -1029,14 +1076,19 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
     def apply_single(self, i, target, **kwargs):
 
         smi = kwargs["smi"]
-        enes = kwargs["ene"]
+        enes = np.array(kwargs["ene"])
         mols = kwargs["mol"]
         mol_ids = kwargs["mol_ids"]
         cwd = kwargs["cwd"]
         fb_main_opts = kwargs["global"]
         fb_tgt_opts = kwargs["local"]
 
-        total_ene = sum(enes)
+        # set T= 1 K
+        kT = offsb.tools.const.kT2kjmol / 298.
+        
+        total_ene = np.exp(-(offsb.tools.const.hartree2kjmol*(enes - enes.min()))/kT).sum()
+        enes = np.exp(-(offsb.tools.const.hartree2kjmol*(enes - enes.min()))/kT)/total_ene
+        # print((np.exp(-(offsb.tools.const.hartree2kjmol*(enes - enes.min()))/kT)/total_ene).sum())
 
         obConversion = openbabel.OBConversion()
         obConversion.SetInAndOutFormats("pdb", "sdf")
@@ -1049,7 +1101,7 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
             mol_id = mol_ids[i]
             mol = offsb.rdutil.mol.rdmol_from_smiles_and_qcmol(smi, qcmol)
 
-            weight = ene / total_ene
+            og_weight = ene
 
             xyz_str = Chem.MolToXYZBlock(mol)
             pdb_str = Chem.MolToPDBBlock(mol)
@@ -1063,26 +1115,25 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
                     "pdb": pdb_str,
                     "sdf": mol2_str,
                     "xyz": xyz_str,
-                    "weight": weight,
-                    "global": fb_main_opts["geometry"].format("OG." + dir, weight),
+                    "global": fb_main_opts["geometry"].format("OG." + dir, og_weight),
                     "local": fb_tgt_opts["geometry"].format(mol_id),
                     "local_fnm": "optgeo_options.txt",
                 }
             if kwargs["energy"]:
                 ret_obj[mol_id]["data"]["energy"] = {
-                    "dir": "AI." + dir,
+                    "dir": "AI." + dir.split('.')[0],
                     "pdb": pdb_str,
                     "sdf": mol2_str,
                     "xyz": xyz_str,
-                    "weight": weight,
-                    "global": fb_main_opts["energy"].format("AI." + dir, weight),
+                    "weight": 1.0,
+                    "global": fb_main_opts["energy"].format("AI." + dir.split('.')[0], 0.1),
                 }
             if kwargs["vibration"]:
                 ret_obj[mol_id]["data"]["vibration"] = {
                     "dir": "VF." + dir,
                     "pdb": pdb_str,
                     "sdf": mol2_str,
-                    "weight": weight,
+                    "weight": 1.0,
                     "global": fb_main_opts["vibration"].format("VF." + dir),
                 }
 
@@ -1195,6 +1246,8 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
 
         super().apply(self._select, targets=targets)
 
+
+        targets = []
         # write the main output config file
         with open(self.fbinput_fname) as fin:
             header = fin.readlines()
@@ -1204,7 +1257,9 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
                     for config in self.db[tgt]["data"].values():
                         opts = config.get("global")
                         if opts is not None:
-                            fout.write(opts)
+                            if opts not in targets:
+                                fout.write(opts)
+                                targets.append(opts)
 
 
 # Secret notes
