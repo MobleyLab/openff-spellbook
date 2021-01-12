@@ -263,6 +263,100 @@ class QCATree(Tree.Tree):
             self.root(), select=select, dereference=dereference
         )
 
+    def _initial_molecules_ids(self, select="Entry", limit=None):
+        mols = dict()
+
+        if limit is not None:
+            limit = int(limit)
+
+        for entry in self.node_iter_depth_first(self.root(), select=select):
+            eobj = self.db[entry.payload]["data"].__dict__
+            if "initial_molecule" in eobj:
+                init_mol_id = eobj["initial_molecule"]
+            elif "initial_molecules" in eobj:
+                init_mol_id = list(eobj["initial_molecules"])
+
+                if limit is not None and isinstance(init_mol_id, list):
+                    init_mol_id = init_mol_id[:limit]
+
+            init_mol_id = ["QCM-" + str(x) for x in init_mol_id]
+            mols[entry.index] = init_mol_id
+        return mols
+
+    def _cache_minimum(self, nodes, stubname, fullname, query_fn, iter_fn=None):
+        if not hasattr(nodes, "__iter__"):
+            nodes = [nodes]
+
+        if iter_fn is None:
+            iter_fn = self.node_iter_depth_first
+
+        nodes = list(nodes)
+        mols = {}
+
+        for top_node in nodes:
+            mols[top_node.index] = []
+            for node in iter_fn(self, top_node, select=stubname, dereference=False):
+                mols[top_node.index].append(node.payload)
+            if mols[top_node.index] == []:
+                mols.pop(top_node.index)
+
+        if len(mols) == 0:
+            return 0
+
+        ids_flat = flatten_list([x for x in mols.values()], -1)
+
+        print("Downloading", len(ids_flat), "minimum", fullname, "using", iter_fn)
+        fresh_obj_map = self.batch_download(ids_flat, query_fn)
+
+        for top_node in nodes:
+
+            for node in iter_fn(self, top_node, select=stubname, dereference=False):
+
+                mol = fresh_obj_map[node.payload]
+                assert mol is not None
+
+                self.db[node.payload] = DEFAULT_DB({"data": mol})
+                node.name = fullname
+                self.register_modified(node, state=Node.CLEAN)
+
+        return len(ids_flat)
+
+    def _cache_obj(self, client_fn, nodes=None, fn=Tree.Tree.node_iter_depth_first, select=None):
+
+        """
+        Generate method to cache results depending on select.
+        """
+
+        if nodes is None:
+            nodes = [self.root()]
+        elif not hasattr(nodes, "__iter__"):
+            nodes = [nodes]
+
+        results = {}
+        for top_node in nodes:
+            results[top_node.index] = []
+            for node in fn(self, top_node, select=select, dereference=False):
+                results[top_node.index].append(node.payload)
+            if results[top_node.index] == []:
+                results.pop(top_node.index)
+        if len(results) == 0:
+            return
+        ids_flat = flatten_list([x for x in results.values()], -1)
+        client = self.db["ROOT"]["data"]
+
+        print("Caching results using iterator", str(fn), "on", len(ids_flat))
+        fresh_obj_map = self.batch_download(ids_flat, client_fn)
+
+        for top_node in nodes:
+            for node in fn(self, top_node, select=select, dereference=False):
+                result = fresh_obj_map[node.payload]
+                assert result is not None
+
+                self.db[node.payload] = DEFAULT_DB({"data": result})
+                self.register_modified(node, state=Node.CLEAN)
+                if "Stub" in node.name:
+                    node.name = node.name[:-4]
+
     def cache_torsiondriverecord_minimum_molecules(self, nodes=None):
 
         tdr_nodes = self.torsiondrives(nodes, dereference=False)
@@ -308,25 +402,15 @@ class QCATree(Tree.Tree):
             else:
                 self.db[key]["data"] = val
 
-    def _initial_molecules_ids(self, select="Entry", limit=None):
-        mols = dict()
+    def _cache_molecules(self, nodes=None, fn=Tree.Tree.node_iter_depth_first, select=None):
+        client = self.db["ROOT"]["data"]
+        client_fn = client.query_molecules
+        self._cache_obj(client_fn, nodes=nodes, fn=fn, select=select)
 
-        if limit is not None:
-            limit = int(limit)
-
-        for entry in self.node_iter_depth_first(self.root(), select=select):
-            eobj = self.db[entry.payload]["data"].__dict__
-            if "initial_molecule" in eobj:
-                init_mol_id = eobj["initial_molecule"]
-            elif "initial_molecules" in eobj:
-                init_mol_id = list(eobj["initial_molecules"])
-
-                if limit is not None and isinstance(init_mol_id, list):
-                    init_mol_id = init_mol_id[:limit]
-
-            init_mol_id = ["QCM-" + str(x) for x in init_mol_id]
-            mols[entry.index] = init_mol_id
-        return mols
+    def _cache_results(self, nodes=None, fn=Tree.Tree.node_iter_depth_first, select=None):
+        client = self.db["ROOT"]["data"]
+        client_fn = client.query_results
+        self._cache_obj(client_fn, nodes=nodes, fn=fn, select=select)
 
     def cache_initial_molecules(self, select="Entry", limit=None):
         """
@@ -350,45 +434,6 @@ class QCATree(Tree.Tree):
                 self.db[key]["data"] = val
 
         return len(fresh_obj_map)
-
-    def _cache_minimum(self, nodes, stubname, fullname, query_fn, iter_fn=None):
-        if not hasattr(nodes, "__iter__"):
-            nodes = [nodes]
-
-        if iter_fn is None:
-            iter_fn = self.node_iter_depth_first
-
-        nodes = list(nodes)
-        mols = {}
-
-        for top_node in nodes:
-            mols[top_node.index] = []
-            for node in iter_fn(self, top_node, select=stubname, dereference=False):
-                mols[top_node.index].append(node.payload)
-            if mols[top_node.index] == []:
-                mols.pop(top_node.index)
-
-        if len(mols) == 0:
-            return 0
-
-        ids_flat = flatten_list([x for x in mols.values()], -1)
-
-        print("Downloading", len(ids_flat), "minimum", fullname, "using", iter_fn)
-        fresh_obj_map = self.batch_download(ids_flat, query_fn)
-
-        for top_node in nodes:
-
-            for node in iter_fn(self, top_node, select=stubname, dereference=False):
-
-                mol = fresh_obj_map[node.payload]
-                assert mol is not None
-
-                self.db[node.payload] = DEFAULT_DB({"data": mol})
-                node.name = fullname
-                self.register_modified(node, state=Node.CLEAN)
-
-        return len(ids_flat)
-
     def cache_minimum_gradients(self, nodes, iter_fn=None):
         client = self.db["ROOT"]["data"]
         return self._cache_minimum(
@@ -401,46 +446,14 @@ class QCATree(Tree.Tree):
             nodes, "MoleculeStub", "Molecule", client.query_molecules, iter_fn
         )
 
-    def cache_gradients(self, nodes):
+    def cache_molecules(self, nodes=None):
+        self._cache_molecules(nodes, select="MoleculeStub")
+
+    def cache_gradients(self, nodes=None):
         self._cache_results(nodes, select="GradientStub")
 
-    def cache_hessians(self, nodes):
+    def cache_hessians(self, nodes=None):
         self._cache_results(nodes, select="HessianStub")
-
-    def _cache_results(self, nodes, fn=Tree.Tree.node_iter_depth_first, select=None):
-        """
-        Generate method to cache results depending on select.
-        """
-
-        if nodes is None:
-            nodes = self.root()
-        elif not hasattr(nodes, "__iter__"):
-            nodes = [nodes]
-
-        results = {}
-        for top_node in nodes:
-            results[top_node.index] = []
-            for node in fn(self, top_node, select=select, dereference=False):
-                results[top_node.index].append(node.payload)
-            if results[top_node.index] == []:
-                results.pop(top_node.index)
-        if len(results) == 0:
-            return
-        ids_flat = flatten_list([x for x in results.values()], -1)
-        client = self.db["ROOT"]["data"]
-
-        print("Caching results using iterator", str(fn), "on", len(ids_flat))
-        fresh_obj_map = self.batch_download(ids_flat, client.query_results)
-
-        for top_node in nodes:
-            for node in fn(self, top_node, select=select, dereference=False):
-                result = fresh_obj_map[node.payload]
-                assert result is not None
-
-                self.db[node.payload] = DEFAULT_DB({"data": result})
-                self.register_modified(node, state=Node.CLEAN)
-                if "Stub" in node.name:
-                    node.name = node.name[:-4]
 
     def cache_optimization_minimum_molecules(self, nodes=None):
 
