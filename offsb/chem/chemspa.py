@@ -3,6 +3,7 @@
 import copy
 import functools
 import io
+import itertools
 import logging
 import os
 import pprint
@@ -11,8 +12,6 @@ import sys
 import tempfile
 
 import numpy as np
-import simtk.unit
-import tqdm
 
 import offsb.chem.types
 import offsb.op.chemper
@@ -20,13 +19,14 @@ import offsb.op.forcebalance
 import offsb.tools.const
 import offsb.treedi.node
 import offsb.treedi.tree
+import offsb.ui.qcasb
+import simtk.unit
+import tqdm
 from offsb.treedi.tree import DEFAULT_DB
 from openforcefield.typing.engines.smirnoff import ForceField
 from openforcefield.typing.engines.smirnoff.parameters import (
     AngleHandler, BondHandler, ImproperDict, ImproperTorsionHandler,
     ParameterList, ProperTorsionHandler, ValenceDict, vdWHandler)
-
-import offsb.ui.qcasb
 
 VDW_DENOM = 10.0
 
@@ -104,6 +104,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
             self.ffname = ff_fname
 
+            self._prim_clusters = dict()
+
             # default try to make new types for these handlers
             self.parameterize_handlers = [
                 "vdW",
@@ -113,6 +115,14 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 "ProperTorsions",
             ]
 
+            self.bit_search_limit = 4
+            self.split_candidate_limit = None # None to disable
+            self.gradient_assigned_only = True
+            self.calculate_score_rank = False
+            self.score_mode = ["min", "max", "abs_min", "abs_max"]
+
+            self.split_mode = self.score_mode[3]
+            self.score_mode = self.score_mode[3]
             # root = self.root()
 
             # # # This sets up a "blank" ChemSpace, one term that covers everything
@@ -420,7 +430,14 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 if group in nodes:
                     # print("This group already covered! param id is", param.id, "Group is \n", group)
                     # print([p[1].id for p in nodes[group]])
-                    nodes[group].append((pnode, param))
+                    if not any([param.id == x[1].id for x in nodes[group]]):
+                        nodes[group].append((pnode, param))
+                    else:
+                        print(
+                            "Warning: parameter",
+                            param.id,
+                            "already in tree; refusing to overwrite",
+                        )
                 else:
                     # print("Adding group for id", param.id, "group is \n", group)
                     nodes[group] = [(pnode, param)]
@@ -815,7 +832,16 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         return pnode
 
     def _scan_param_with_bit(
-        self, param_data, lbl, bit, key=None, eps=1.0, mode="sum_difference"
+        self,
+        param_data,
+        lbl,
+        group,
+        bit,
+        key=None,
+        eps=1.0,
+        mode="sum_difference",
+        bit_gradients=None,
+        ignore_bits=None,
     ):
         ys_bit = []
         no_bit = []
@@ -830,26 +856,138 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
         verbose = True
 
-        bit_gradients = []
+        if type(mode) is str:
+            mode = [mode]
 
-        for prim, dat in param_data[lbl].items():
+        if bit_gradients is None:
+            bit_gradients = []
+
+        if ignore_bits is None:
+            ignore_bits = {}
+
+        groups = self._prim_clusters.get(lbl, None)
+
+        if self.calculate_score_rank and groups is None:
+            prims = list(param_data[lbl])
+
+            # hashing the prims is expensive so cache it
+            param_array = [param_data[lbl][prims[j]] for j in range(len(prims))]
+
+            groups = {}
+            # if lbl == 'b6':
+            #     breakpoint()
+            if verbose:
+                print("This label has {:d} primitives".format(len(prims)))
+            n_groups = len(range(1, (len(prims) + 1) // 2 + 1))
+            for i in range(1, (len(prims) + 1) // 2 + 1):
+                iterable = list(itertools.combinations(range(len(prims)), i))
+                n_iterable = len(iterable)
+                for j, group_a in tqdm.tqdm(enumerate(iterable), total=n_iterable, ncols=80, desc="Group scan {}/{}".format(i, n_groups), disable=not verbose):
+                    group_b = tuple(j for j in range(len(prims)) if j not in group_a)
+                    group_key = tuple(sorted((group_a, group_b)))
+                    if group_key in groups:
+                        continue
+
+                    lhs = np.vstack([param_array[j] for j in group_a])
+                    # lhs = np.sum(lhs, axis=0)
+                    rhs = np.vstack([param_array[j] for j in group_b])
+                    # rhs = np.sum(rhs, axis=0)
+
+                    vals = {}
+                    for mode_i in mode:
+                        val = 0.0
+                        if mode_i == "sum_difference":
+                            val = np.sum(rhs, axis=0) - np.sum(lhs, axis=0)
+                        if mode_i == "mag_difference":
+                            val = np.linalg.norm(
+                                np.sum(rhs, axis=0) - np.sum(lhs, axis=0)
+                            )
+                        elif mode_i == "mean_difference":
+                            if lbl[0] in "ait":
+                                lhs = list(
+                                    map(lambda x: x + 180 if x < 180 else x, lhs)
+                                )
+                                rhs = list(
+                                    map(lambda x: x + 180 if x < 180 else x, rhs)
+                                )
+                            val = np.mean(rhs, axis=0) - np.mean(lhs, axis=0)
+                        if key == "measure":
+                            if denoms[lbl[0]] == 0.0:
+                                val = 0.0
+                            else:
+                                val = val / denoms[lbl[0]]
+                        if key == "measure":
+                            if denoms[lbl[0]] == 0.0:
+                                val = 0.0
+                            else:
+                                val = val * denoms[lbl[0]]
+                        vals[mode_i] = val
+
+                    groups[group_key] = vals
+            groups = [(a, b, c) for (a, b), c in groups.items()]
+
+            for mode_i in mode:
+                groups_sorted = sorted(
+                    groups, key=lambda x: np.max(np.abs(x[2][mode_i])), reverse=True
+                )
+                print(
+                    "\n\nCluster analysis of primitives; max,min predicted split would be for mode {:s}".format(
+                        mode_i
+                    )
+                )
+                if len(groups_sorted) > 0:
+                    # for grp in groups_sorted:
+                    #     print(grp)
+                    print(groups_sorted[0])
+                    print(groups_sorted[-1])
+                    print("Total permutations for {} primitives: {}".format(len(groups_sorted[0][0]) + len(groups_sorted[0][1]), len(groups_sorted)))
+                else:
+                    print("None")
+                print("\n")
+            # for line in groups:
+            #     print(line)
+            self._prim_clusters[lbl] = groups
+
+        chosen_split = [[], []]
+        for i, (prim, dat) in enumerate(param_data[lbl].items()):
             if key is not None:
                 dat = dat[key]
             # pdb.set_trace()
             if verbose:
-                print(
-                    "Considering prim", prim, "with smarts", prim.to_smarts(), end=" "
-                )
-            if bit in prim:
+                try:
+                    smarts = prim.to_smarts()
+                    print("Considering prim", prim, "with smarts", smarts, end=" ")
+                except Exception as e:
+                    breakpoint()
+            # if bit in prim:
+            if prim not in (group - bit):
                 if verbose:
-                    print("yes (N=", len(dat), ")")
+                    print(
+                        "same (N=",
+                        len(dat),
+                        ") mean: {} var: {} sum: {}".format(
+                            np.mean(dat, axis=0),
+                            np.var(dat, axis=0),
+                            np.sum(dat, axis=0),
+                        ),
+                    )
+                chosen_split[0].append(i)
                 ys_bit.extend(dat)
             else:
                 if verbose:
-                    print("no  (N=", len(dat), ")")
+                    print(
+                        "change (N=",
+                        len(dat),
+                        ") mean: {} var: {} sum: {}".format(
+                            np.mean(dat, axis=0),
+                            np.var(dat, axis=0),
+                            np.sum(dat, axis=0),
+                        ),
+                    )
+                chosen_split[1].append(i)
                 no_bit.extend(dat)
         if verbose:
-            print("    Has bit (N=", len(ys_bit), ") :", end=" ")
+            print("    Parent group (N=", len(ys_bit), ") :", end=" ")
         if len(ys_bit) > 0:
             pass
             if verbose:
@@ -867,8 +1005,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 print("None")
         # print(ys_bit)
         if verbose:
-            print("    No bit (N=", len(no_bit), ") :", end=" ")
-        if len(no_bit) > 0:
+            print("    New group (N=", len(no_bit), ") :", end=" ")
+        if len(no_bit) > 0 and len(ys_bit) > 0:
             if verbose:
                 print(
                     "mean:",
@@ -879,21 +1017,37 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                     np.sum(no_bit, axis=0),
                 )
 
-            val = 0.0
-            if mode == "sum_difference":
-                val = np.sum(no_bit, axis=0) - np.sum(ys_bit, axis=0)
-            if mode == "mag_difference":
-                val = np.linalg.norm(np.sum(no_bit, axis=0) - np.sum(ys_bit, axis=0))
-            elif mode == "mean_difference":
-                if lbl[0] in "ait":
-                    no_bit = list(map(lambda x: x + 180 if x < 180 else x, no_bit))
-                    ys_bit = list(map(lambda x: x + 180 if x < 180 else x, ys_bit))
-                val = np.mean(no_bit, axis=0) - np.mean(ys_bit, axis=0)
-            if key == "measure":
-                if denoms[lbl[0]] == 0.0:
-                    val = 0.0
-                else:
-                    val = val / denoms[lbl[0]]
+            lhs = no_bit
+            # lhs = np.sum(lhs, axis=0)
+            rhs = ys_bit
+            # rhs = np.sum(rhs, axis=0)
+
+            vals = {}
+            for mode_i in mode:
+                val = 0.0
+                if mode_i == "sum_difference":
+                    val = np.sum(rhs, axis=0) - np.sum(lhs, axis=0)
+                if mode_i == "mag_difference":
+                    val = np.linalg.norm(np.sum(rhs, axis=0) - np.sum(lhs, axis=0))
+                elif mode_i == "mean_difference":
+                    if lbl[0] in "ait":
+                        lhs = list(map(lambda x: x + 180 if x < 180 else x, lhs))
+                        rhs = list(map(lambda x: x + 180 if x < 180 else x, rhs))
+                    val = np.mean(rhs, axis=0) - np.mean(lhs, axis=0)
+                if key == "measure":
+                    if denoms[lbl[0]] == 0.0:
+                        val = 0.0
+                    else:
+                        val = val / denoms[lbl[0]]
+                if key == "measure":
+                    if denoms[lbl[0]] == 0.0:
+                        val = 0.0
+                    else:
+                        val = val * denoms[lbl[0]]
+                vals[mode_i] = val
+
+            # default is to score by the first mode supplied
+            val = vals[mode[0]]
             success = np.abs(val) > eps
             if key == "measure":
                 if denoms[lbl[0]] == 0.0:
@@ -909,19 +1063,70 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 # sum_difference, which could provide multiple values.
                 success = any(success)
             if success:
-                new_val = [
-                    lbl,
-                    bit.copy(),
-                    val,
-                ]
                 if verbose:
-                    print("Appending result", new_val)
-                bit_gradients.append(new_val)
+                    print("Sorting groups...")
+                rank = None
+                groups = self._prim_clusters
+                if len(groups):
+                    group_a = sorted(chosen_split[0])
+                    group_b = sorted(chosen_split[1])
+                    chosen_split = sorted(map(tuple, [group_a, group_b]))
+                    chosen_split = tuple(chosen_split)
+                    groups_sorted = sorted(
+                        groups, key=lambda x: np.max(np.abs(x[2][mode[0]])), reverse=True
+                    )
+                    rank_pos = [i for i,v in enumerate(groups_sorted) if v[2][mode[0]] == vals[mode[0]]][0]
+                    score_0_to_1 = (vals[mode[0]] - groups_sorted[-1][2][mode[0]]) / (groups_sorted[0][2][mode[0]] - groups_sorted[-1][2][mode[0]]) if (groups_sorted[0][2][mode[0]] - groups_sorted[-1][2][mode[0]]) else 1.0
+                    rank = {"rank": rank_pos+1, "rank_of": len(groups), "rank_1": groups_sorted[0][2][mode[0]], "score_0_to_1": score_0_to_1}
+
+                new_val = [lbl, bit.copy(), vals, chosen_split, rank]
+                duplicate = False
+                for i, x in enumerate(bit_gradients):
+                    if (
+                        x[0] == lbl
+                        # and (any([x[1] == y for y in bit]) or bit not in x[1])
+                        and chosen_split == x[3]
+                    ):
+                        if bit.bits() < x[1].bits():
+                            print(
+                                "Swapping existing result (bits=", x[1].bits(), ")", x, 
+                                "with (bits=",
+                                bit.bits(),
+                                ")",
+                                new_val,
+                            )
+                            bit_gradients[i] = new_val
+
+                            print("Adding ", lbl, bit, "to ignore")
+                            if (lbl, bit) in ignore_bits:
+                                ignore_bits[(lbl, bit)].append((vals, None))
+                            else:
+                                ignore_bits[(lbl, bit)] = [(vals, None)]
+
+                            if (lbl, x[0]) in ignore_bits:
+                                ignore_bits[(x[0], x[1])].append((x[2], None))
+                            else:
+                                ignore_bits[(x[0], x[1])] = [(x[2], None)]
+
+                        duplicate = True
+                        break
+
+                if not duplicate:
+                    print("Appending result (bits=", bit.bits(), ")", new_val)
+                    bit_gradients.append(new_val)
+                else:
+                    print(
+                        "Not appending result since a lower bit split produces the same result"
+                    )
+                    print("Adding ", lbl, bit, "to ignore")
+                    if (lbl, bit) in ignore_bits:
+                        ignore_bits[(lbl, bit)].append((vals, None))
+                    else:
+                        ignore_bits[(lbl, bit)] = [(vals, None)]
+                print("\n")
         else:
             if verbose:
                 print("None")
-
-        return bit_gradients
 
     def _check_overlapped_parameter(self, pre, post, node):
         parent_param = self[node.parent].payload
@@ -929,18 +1134,39 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
         n_pre = 0
         for entry in pre.db.values():
-            entry = entry['data']
-            n_pre += sum([1 for ic_type in entry for atoms,lbl in entry[ic_type].items() if lbl == parent_param])
-       
+            entry = entry["data"]
+            n_pre += sum(
+                [
+                    1
+                    for ic_type in entry
+                    for atoms, lbl in entry[ic_type].items()
+                    if lbl == parent_param
+                ]
+            )
+
         n_post = 0
         for entry in post.db.values():
-            entry = entry['data']
-            n_post += sum([1 for ic_type in entry for atoms,lbl in entry[ic_type].items() if lbl == parent_param]) 
+            entry = entry["data"]
+            n_post += sum(
+                [
+                    1
+                    for ic_type in entry
+                    for atoms, lbl in entry[ic_type].items()
+                    if lbl == parent_param
+                ]
+            )
 
         n_new_post = 0
         for entry in post.db.values():
-            entry = entry['data']
-            n_new_post += sum([1 for ic_type in entry for atoms,lbl in entry[ic_type].items() if lbl == child_param]) 
+            entry = entry["data"]
+            n_new_post += sum(
+                [
+                    1
+                    for ic_type in entry
+                    for atoms, lbl in entry[ic_type].items()
+                    if lbl == child_param
+                ]
+            )
 
         if n_pre >= 0 and n_post == 0 and n_new_post == n_pre:
             return True
@@ -949,12 +1175,21 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             return False
 
     def _find_next_split(
-        self, param_data, key=None, ignore_bits=None, mode="sum_difference", eps=1.0
+        self,
+        param_data,
+        key=None,
+        ignore_bits=None,
+        mode="sum_difference",
+        eps=1.0,
+        bit_gradients=None,
     ):
 
-        verbose = True
+        verbose = False
+        info = True
 
-        bit_gradients = []
+
+        if bit_gradients is None:
+            bit_gradients = []
         if ignore_bits is None:
             ignore_bits = {}
 
@@ -964,9 +1199,35 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             if self[x].payload in self.parameterize_handlers
         ]
         nodes = list(self.node_iter_breadth_first(handlers))
+
+        QCA = self._po.source.source
+
+        labeler = self._labeler
+
+        # labels = [entry['data'][ph].values() for entry in labeler.db.values() for ph in handlers]
+
+        # this only has the labels that we plan to modify, since we optionally
+        # ignore entire handlers and/or parameters
+        labels = [
+            ph_lbls
+            for ph in handlers
+            for ph_lbls in labeler.db["ROOT"]["data"][ph.payload]
+        ]
+
         n_bits = {}
+
+        if verbose:
+            print("\n\nDetermining next split...")
+            print("\nCandidates are")
+            print([x.payload for x in nodes])
+            print("Have label data for", labels)
+            print("Param data labels is", list(param_data))
+
         for node in tqdm.tqdm(nodes, total=len(nodes), desc="bit scanning", ncols=80):
             lbl = node.payload
+
+            if lbl not in labels:
+                continue
             # if lbl[0] != 't':
             #     continue
 
@@ -975,6 +1236,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             if lbl not in param_data:
                 continue
             group = functools.reduce(lambda x, y: x + y, param_data[lbl])
+
+            print("\nConsidering for bit scans", node)
 
             # only iterate on bits that matched from the smirks from the data
             # we are considering
@@ -986,20 +1249,20 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             # if (group - self.db[lbl]["data"]["group"]).reduce() != 0:
 
             # TODO: why does this true so often???
-            # try:
-            #     # Checking the sum does not work for torsions, so check each individually
-            #     # if group not in self.db[lbl]["data"]["group"]:
-            #     if any(
-            #         [x not in self.db[lbl]["data"]["group"] for x in param_data[lbl]]
-            #     ):
-            #         print("ERROR: data is not covered by param!")
-            #         print("Group is", group)
-            #         print("FF Group is", self.db[lbl]["data"]["group"])
-            #         print("marginal is ", group - self.db[lbl]["data"]["group"])
-            #         # breakpoint()
-            # except Exception as e:
-            #     print(e)
-            #     breakpoint()
+            try:
+                # Checking the sum does not work for torsions, so check each individually
+                # if group not in self.db[lbl]["data"]["group"]:
+                if any(
+                    [x not in self.db[lbl]["data"]["group"] for x in param_data[lbl]]
+                ):
+                    print("ERROR: data is not covered by param!")
+                    print("Group is", group)
+                    print("FF Group is", self.db[lbl]["data"]["group"])
+                    print("marginal is ", group - self.db[lbl]["data"]["group"])
+                    # breakpoint()
+            except Exception as e:
+                print(e)
+                # breakpoint()
 
             # Now that we know all params are covered by this FF param,
             # sanitize the group by making it match the FF group, so things
@@ -1023,23 +1286,103 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                     print("This dataset does not cover this information:")
                     print(uncovered)
 
+            param_group = self.db[lbl]["data"]["group"]
+
             # iterate bits that we cover (AND them just to be careful)
             # group = group & self.db[lbl]["data"]["group"]
             if verbose:
                 print("\nContinuing with param ", lbl, "this information:")
+                for data in param_data[lbl]:
+                    print(data)
                 print(group)
+                print("\nFF param for ", lbl, "is:")
+                print(param_group)
 
             n_bits[lbl] = sum([1 for x in group])
+            bit_visited = {}
 
-            for bit in group:
-                if verbose:
-                    print("Scanning for bit", bit)
-                if any([x == bit for x in ignore_bits]):
+            # manipulations = set([bit for bit in param_group if bit in group])
+            manipulations = set([bit for bit in group])
+
+            todo = len(manipulations) + 1
+            completed = 0
+
+            self._prim_clusters.clear()
+
+            while len(manipulations) > 0:
+                bit = manipulations.pop()
+                todo -= 1
+                if info:
+                    print(
+                        "{:8d}/{:8d}".format(todo, completed),
+                        "Scanning for bit ({:3d})".format(bit.bits()),
+                        bit,
+                    )
+                # if lbl == 't3' and todo == 15 and completed == 2:
+                #     breakpoint()
+                completed += 1
+                # Already visited; skip
+                if any([x == bit for x in bit_visited]):
+                    continue
+
+                if any([x[0] == lbl and x[1] == bit for x in ignore_bits]):
                     if verbose:
                         print("Ignoring since it is in the ignore list")
                     continue
-                elif verbose:
-                    print("This is a new bit, continuing")
+
+                # we shouldn't try to split if it makes the new parameter invalid
+                # aa = param_group & bit
+                # ab = param_group - bit
+                # if lbl == 'b83':
+                #     breakpoint()
+
+                # here we want to make sure that the bit is anchored to the FF
+                # param, and that removing it will still produce a valid param
+                # no reason to continue if our split will produce a dud
+
+                if (param_group & bit) != bit or not (param_group - bit).is_valid():
+                    bit_visited[bit] = None
+                    if verbose:
+                        print("This bit is required, cannot split")
+                    continue
+                # elif verbose:
+                #     print("This bit is valid:", param_group - bit)
+
+                # an important check is if any of the prims would actually move
+                # over to the new param; skip if not since this would produce
+                # a useless parameter
+                in_new = [x in (param_group - bit) for x in param_data[lbl]]
+                occluding_split = all(in_new)
+                valid_split = occluding_split or any(in_new)
+
+                if not valid_split:
+                    bit_visited[bit] = None
+                    if verbose:
+                        print("This bit would not separate the data; refusing to use")
+                    continue
+
+                # if the bit is still there, then it is there by symmetry
+                # this means we will be double counting, since we will try the
+                # bit twice
+                # if bit in (param_group - bit) or occluding_split:
+                if occluding_split:
+                    bit_visited[bit] = None
+                    if verbose:
+                        print("This bit occludes the parent parameter", end=" ")
+                    if self.bit_search_limit is None or bit.bits() < self.bit_search_limit:
+                        if verbose:
+                            print(
+                                "adding another bit (",
+                                bit.bits() + 1,
+                                ")",
+                            )
+                        new_manips = list([bit + x for x in group])
+                        n_manips = len(manipulations)
+                        manipulations = manipulations.union(new_manips)
+                        todo += len(manipulations) - n_manips
+                    elif verbose:
+                        print()
+                    continue
 
                 # for ignore in ignore_bits:
                 #     if type(ignore) == type(bit) and :
@@ -1047,13 +1390,20 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 #             print("Ignoring since it is in the ignore list. Matches this ignore:")
                 #             print(ignore)
                 #         continue
-                bit_grads = self._scan_param_with_bit(
-                    param_data, lbl, bit, key=key, mode=mode, eps=eps
+                self._scan_param_with_bit(
+                    param_data,
+                    lbl,
+                    param_group,
+                    bit,
+                    key=key,
+                    mode=mode,
+                    eps=eps,
+                    bit_gradients=bit_gradients,
+                    ignore_bits=ignore_bits,
                 )
-                bit_gradients.extend(bit_grads)
 
         if len(bit_gradients) == 0:
-            return None
+            return None, None
 
         print("\n\nBits per parameter:")
         for i, (b, v) in enumerate(n_bits.items(), 1):
@@ -1062,31 +1412,80 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 print(" |\n", end="")
         print("\nTotal parameters:", len(n_bits))
 
+        # bit_gradients = [bit_gradient for ignore in ignore_bits for bit_gradient in bit_gradients if not (bit_gradient[0] == ignore[0] and bit_gradient[1] == ignore[1])]
+        bg = []
+        for bit_gradient in bit_gradients:
+            keep = True
+            for ignore in ignore_bits:
+                if bit_gradient[0] == ignore[0] and bit_gradient[1] == ignore[1]:
+                    keep = False
+                    break
+            if keep:
+                bg.append(bit_gradient)
+        bit_gradients = bg
+        # sort by largest difference, then by fewest bits, so two splits with
+        # the same difference will cause the most general split to win
         bit_gradients = sorted(
-            bit_gradients, key=lambda x: np.max(np.abs(x[2])), reverse=True
+            bit_gradients,
+            key=lambda x: (np.max(np.abs(x[2][mode[0]])), -x[1].bits(), x[1]),
+            reverse=True,
         )
 
+        print(
+            "\n\n### Here are the candidates to split, ordered by priority (mode: {}) ###".format(
+                mode[0]
+            )
+        )
+        for bit_gradient in bit_gradients:
+            print("bits={}".format(bit_gradient[1].bits()), bit_gradient)
 
+        if self.split_candidate_limit is not None:
+            print("Limiting candidates to the top {}".format(self.split_candidate_limit))
+            bit_gradients = bit_gradients[:self.split_candidate_limit]
 
         QCA = self._po.source.source
         # self.to_smirnoff_xml("tmp.offxml", verbose=False)
         # coverage_pre = offsb.ui.qcasb.QCArchiveSpellBook(QCA=QCA).assign_labels_from_openff("tmp.offxml", "tmp.offxml")
         # need this for measuring geometry
         # should only need to do it once
-        
+
+        print("\n\nHere is ignore:")
+        for ignore in ignore_bits:
+            print(ignore)
+        print("\n")
+
         for bit_gradient in bit_gradients:
             # split_bit = bit_gradients[0][1]
+            lbl = bit_gradient[0]
             split_bit = bit_gradient[1]
-            if all([x != split_bit for x in ignore_bits]):
+            split_combination = bit_gradient
+            if all(
+                [
+                    not (
+                        (x[0] == lbl and x[1] == split_bit)
+                        and (
+                            x[0] == lbl
+                            and any([split_combination == y[1] for y in ignore_bits[x]])
+                        )
+                    )
+                    for x in ignore_bits
+                ]
+            ):
+
                 # child = group - split_bit
-                lbl = bit_gradient[0]
                 node = self.split_parameter(lbl, split_bit)
                 if node is None:
                     continue
                 # self.to_smirnoff_xml("tmp.offxml", verbose=False)
                 # coverage_post = offsb.ui.qcasb.QCArchiveSpellBook(QCA=QCA).assign_labels_from_openff("tmp.offxml", "tmp.offxml")
                 # overlapped = self._check_overlapped_parameter(coverage_pre, coverage_post, node)
-                ignore_bits[split_bit] = bit_gradient[2]
+                print("Adding ", lbl, split_bit, "to ignore")
+                if (lbl, split_bit) in ignore_bits:
+                    ignore_bits[(lbl, split_bit)].append(
+                        (bit_gradient[2], bit_gradient[3])
+                    )
+                else:
+                    ignore_bits[(lbl, split_bit)] = [(bit_gradient[2], bit_gradient[3])]
                 print(
                     "\n=====\nSplitting",
                     lbl,
@@ -1111,7 +1510,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                     (self.db[lbl]["data"]["group"] - split_bit).to_smarts(),
                     "\n\n",
                 )
-                
+
                 # if overlapped:
 
                 #     print("This param occluded its parent; narrowing the parent and continuing")
@@ -1127,9 +1526,11 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 # print("Smarts is")
                 # print(child.to_smarts())
 
-                return node
+                return node, bit_gradient[2]
+            else:
+                print("This parameter is in the ignore list:", bit_gradient)
 
-        return None
+        return None, None
 
     def _calculate_ic_force_constants(self):
 
@@ -1191,6 +1592,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
         self.to_smirnoff_xml("tmp.offxml", verbose=False)
         labeler = qcasb.assign_labels_from_openff("tmp.offxml", "tmp.offxml")
+        self._labeler = qcasb.assign_labels_from_openff("tmp.offxml", "tmp.offxml")
 
         n_entries = len(list(QCA.iter_entry()))
         for entry in tqdm.tqdm(
@@ -1232,99 +1634,107 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
             primitives = self._to.db[entry.payload]["data"]
 
-            for hessian_node in QCA.node_iter_depth_first(entry, select="Hessian"):
-                mol = QCA[hessian_node.parent]
-
-                with tempfile.NamedTemporaryFile(mode="wt") as f:
-                    offsb.qcarchive.qcmol_to_xyz(
-                        QCA.db[mol.payload]["data"], fnm=f.name
-                    )
-                    gmol = geometric.molecule.Molecule(f.name, ftype="xyz")
-                with open("out.xyz", mode="wt") as f:
-                    offsb.qcarchive.qcmol_to_xyz(QCA.db[mol.payload]["data"], fd=f)
-
-                xyz = QCA.db[mol.payload]["data"].geometry
-                hess = QCA.db[hessian_node.payload]["data"].return_result
-                grad = np.array(
-                    QCA.db[hessian_node.payload]["data"].extras["qcvars"][
-                        "CURRENT GRADIENT"
-                    ]
-                )
-
-                ic_prims = geometric.internal.PrimitiveInternalCoordinates(
-                    gmol,
-                    build=True,
-                    connect=True,
-                    addcart=False,
-                    constraints=None,
-                    cvals=None,
-                )
-
-                for ic_type, prim_fn in prim_table.items():
-                    for unmapped, param_name in labeler.db[entry.payload]["data"][
-                        ic_type
-                    ].items():
-                        # forward map to QCA index, which is what ICs use
-
-                        aidx = [atom_map[i] - 1 for i in unmapped]
-
-                        if prim_fn is geometric.internal.OutOfPlane:
-                            aidx = ImproperDict.key_transform(aidx)
-                            param_name = "i"
-                        else:
-                            aidx = ValenceDict.key_transform(aidx)
-
-                        new_ic = prim_fn(*aidx)
-                        if new_ic not in ic_prims.Internals:
-                            # Is it ok if we add extra ICs to the primitive list?
-                            # if prim_fn is not geometric.internal.OutOfPlane:
-                            #     print("Adding an IC:", new_ic, "which may indicate missing coverage by the FF!")
-                            ic_prims.add(new_ic)
-
-                        # if the tuple has no param (impropers), skip it
-                        try:
-                            prim = prim_to_graph[param_name[0]].from_string_list(
-                                primitives[unmapped]
-                            )
-                            self._prim[entry.payload][unmapped] = prim
-                        except Exception as e:
-                            breakpoint()
-
-                ic_hess = ic_prims.calcHess(xyz, grad, hess)
-
-                ic_data = {}
-                # eigs = np.linalg.eigvalsh(ic_hess)
-                # s = np.argsort(np.diag(ic_hess))
-                # force_vals = eigs
-                force_vals = np.diag(ic_hess)
-                # ic_vals = [ic_prims.Internals[i] for i in s]
-                ic_vals = ic_prims.Internals
-                for aidx, val in zip(ic_vals, force_vals):
-                    key = tuple(
-                        map(
-                            lambda x: map_inv[int(x) - 1],
-                            str(aidx).split()[1].split("-"),
+            for grad_node in QCA.node_iter_depth_first(entry, select="Gradient"):
+                for mol in QCA.node_iter_depth_first(grad_node, select="Molecule"):
+                    with tempfile.NamedTemporaryFile(mode="wt") as f:
+                        offsb.qcarchive.qcmol_to_xyz(
+                            QCA.db[mol.payload]["data"], fnm=f.name
                         )
+                        gmol = geometric.molecule.Molecule(f.name, ftype="xyz")
+                    with open("out.xyz", mode="wt") as f:
+                        offsb.qcarchive.qcmol_to_xyz(QCA.db[mol.payload]["data"], fd=f)
+
+                    ic_prims = geometric.internal.PrimitiveInternalCoordinates(
+                        gmol,
+                        build=True,
+                        connect=True,
+                        addcart=False,
+                        constraints=None,
+                        cvals=None,
                     )
 
-                    if type(aidx) is geometric.internal.OutOfPlane:
-                        key = ImproperDict.key_transform(key)
-                    else:
-                        key = ValenceDict.key_transform(key)
+                    for ic_type, prim_fn in prim_table.items():
+                        for unmapped, param_name in labeler.db[entry.payload]["data"][
+                            ic_type
+                        ].items():
+                            # forward map to QCA index, which is what ICs use
 
-                    # no conversion, this is done elsewhere, e.g. set_parameter
-                    # if type(aidx) is geometric.internal.Distance:
-                    #     val = val / (offsb.tools.const.bohr2angstrom ** 2)
-                    # val *= offsb.tools.const.hartree2kcalmol
+                            aidx = [atom_map[i] - 1 for i in unmapped]
 
-                    # if mol.payload == "QCM-1396980":
-                    #     breakpoint()
-                    #     print("HI")
-                    if mol.payload not in self._fc:
-                        self._fc[mol.payload] = {key: val}
-                    else:
-                        self._fc[mol.payload][key] = val
-                    # ic_data[key] = val
+                            if prim_fn is geometric.internal.OutOfPlane:
+                                aidx = ImproperDict.key_transform(aidx)
+                                param_name = "i"
+                            else:
+                                aidx = ValenceDict.key_transform(aidx)
+
+                            new_ic = prim_fn(*aidx)
+                            if new_ic not in ic_prims.Internals:
+                                # Is it ok if we add extra ICs to the primitive list?
+                                # if prim_fn is not geometric.internal.OutOfPlane:
+                                #     print("Adding an IC:", new_ic, "which may indicate missing coverage by the FF!")
+                                ic_prims.add(new_ic)
+
+                            # if the tuple has no param (impropers), skip it
+                            try:
+                                prim = prim_to_graph[param_name[0]].from_string_list(
+                                    primitives[unmapped], sorted=True
+                                )
+
+                                prim_map = self._prim.get(entry.payload)
+                                if prim_map is None:
+                                    self._prim[entry.payload] = {unmapped: prim}
+                                else:
+                                    prim_map[unmapped] = prim
+                            except Exception as e:
+                                breakpoint()
+                                print("Issue with assigning primitive! Error message:")
+                                print(e)
+
+
+                    for hessian_node in QCA.node_iter_depth_first(mol, select="Hessian"):
+
+                        xyz = QCA.db[mol.payload]["data"].geometry
+                        hess = QCA.db[hessian_node.payload]["data"].return_result
+                        grad = np.array(
+                            QCA.db[hessian_node.payload]["data"].extras["qcvars"][
+                                "CURRENT GRADIENT"
+                            ]
+                        )
+
+                        ic_hess = ic_prims.calcHess(xyz, grad, hess)
+
+                        # eigs = np.linalg.eigvalsh(ic_hess)
+                        # s = np.argsort(np.diag(ic_hess))
+                        # force_vals = eigs
+                        force_vals = np.diag(ic_hess)
+                        # ic_vals = [ic_prims.Internals[i] for i in s]
+                        ic_vals = ic_prims.Internals
+                        for aidx, val in zip(ic_vals, force_vals):
+                            key = tuple(
+                                map(
+                                    lambda x: map_inv[int(x) - 1],
+                                    str(aidx).split()[1].split("-"),
+                                )
+                            )
+
+                            if type(aidx) is geometric.internal.OutOfPlane:
+                                key = ImproperDict.key_transform(key)
+                            else:
+                                key = ValenceDict.key_transform(key)
+
+                            # no conversion, this is done elsewhere, e.g. set_parameter
+                            # if type(aidx) is geometric.internal.Distance:
+                            #     val = val / (offsb.tools.const.bohr2angstrom ** 2)
+                            # val *= offsb.tools.const.hartree2kcalmol
+
+                            # if mol.payload == "QCM-1396980":
+                            #     breakpoint()
+                            #     print("HI")
+                            if mol.payload not in self._fc:
+                                self._fc[mol.payload] = {key: val}
+                            else:
+                                self._fc[mol.payload][key] = val
+                            # ic_data[key] = val
 
                 # for aidx, vals in ic_data.items():
                 #     if ic_type == "Bonds":
@@ -1340,8 +1750,64 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 #     print("average val is", new_val)
                 #     self._set_parameter_force(param_name, new_val)
 
+        self.print_label_assignments()
+
         # self.to_smirnoff_xml("tmp.offxml", verbose=True)
         # return param_data
+
+    def print_label_assignments(self):
+
+        """
+        print the entry, atoms, prim, label, label smarts
+        """
+
+        handlers = [
+            self[x]
+            for x in self.root().children
+            if self[x].payload in self.parameterize_handlers
+        ]
+
+        QCA = self._po.source.source
+
+        print("\nPRINT OUT OF MOLECULE ASSIGNMENTS\n")
+
+        self.to_smirnoff_xml("tmp.offxml", verbose=False)
+        self._labeler = offsb.ui.qcasb.QCArchiveSpellBook(
+            QCA=QCA
+        ).assign_labels_from_openff("tmp.offxml", "tmp.offxml")
+
+        params = {
+            lbl: param
+            for ph in handlers
+            for lbl, param in self._labeler.db["ROOT"]["data"][ph.payload].items()
+        }
+
+        for entry in QCA.iter_entry():
+
+            labels = {
+                aidx: lbl
+                for ph in handlers
+                for aidx, lbl in self._labeler.db[entry.payload]["data"][
+                    ph.payload
+                ].items()
+            }
+
+            # prims = self._prim[entry.payload]
+
+            for aidx in labels:
+                lbl = labels[aidx]
+                print(
+                    "    ",
+                    entry.payload,
+                    aidx,
+                    lbl,
+                    params[lbl]["smirks"],
+                    "".join(self._to.db[entry.payload]["data"][aidx]),
+                    # prims[aidx],
+                )
+            print("---------------------------------")
+
+        print("#################################")
 
     ###
 
@@ -1480,6 +1946,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
         self.to_smirnoff_xml("tmp.offxml", verbose=False)
         labeler = qcasb.assign_labels_from_openff("tmp.offxml", "tmp.offxml")
+        self._labeler = labeler
 
         # should return a dict of the kind
         #
@@ -1528,24 +1995,27 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                             #     print("HI!")
                             if labels[aidx] == param_name:
                                 # param_vals.extend(vals)
-                                # if aidx not in self._prim[entry.payload]:
-                                #     breakpoint()
-                                #     print("HI!")
+                                if aidx not in self._prim[entry.payload]:
+                                    breakpoint()
+                                    print("HI!")
 
                                 key = self._prim[entry.payload][aidx]
                                 # if aidx not in self._fc[mol.payload]:
                                 #     breakpoint()
                                 #     print("HI!")
 
-                                force_vals = self._fc[mol.payload][aidx]
                                 if key not in param_data[param_name]:
                                     param_data[param_name][key] = {
                                         "measure": [],
                                         "force": [],
                                     }
 
-                                param_data[param_name][key]["measure"].extend(vals)
-                                param_data[param_name][key]["force"].append(force_vals)
+                                mol_fc = self._fc.get(mol.payload)
+                                if mol_fc is not None:
+                                    force_vals = mol_fc[aidx]
+
+                                    param_data[param_name][key]["measure"].extend(vals)
+                                    param_data[param_name][key]["force"].append(force_vals)
 
                     # for hessian_node in QCA.node_iter_depth_first(entry, select="Hessian"):
                     #     mol = QCA[hessian_node.parent]
@@ -1642,8 +2112,11 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         print(
             "Parsing data from physical optimizer, smarts generator, and molecule data"
         )
+
         n_entries = len(list(QCA.iter_entry()))
         for i, entry in enumerate(QCA.iter_entry()):
+
+            print("    {:8d}/{:8d} : {}".format(i + 1, n_entries, entry))
 
             if entry.payload not in self._po._setup.labeler.db:
                 continue
@@ -1654,25 +2127,33 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 continue
             primitives = self._to.db[entry.payload]["data"]
 
-            print("    {:8d}/{:8d} : {}".format(i + 1, n_entries, entry))
-
             for molecule in QCA.node_iter_depth_first(entry, select="Molecule"):
                 mol_id = molecule.payload
-                obj = self._po.db[mol_id]["data"]
+                
+                obj = self._po.db.get(mol_id)
+                if obj is None:
+                    continue
+
+                obj = obj["data"]
 
                 # IC keys (not vdW)
                 for key in [k for k in obj if type(k) == tuple and k in labels]:
-                    matched_params = [
-                        val
-                        for i, val in enumerate(obj[key]["dV"])
-                        if labels[key] == param_labels[i]
-                    ]
+                    matched_params = []
+                    for j, val in enumerate(obj[key]["dV"]):
+                        if labels[key] == param_labels[j]:
+                            matched_params.append(val)
+
+                    lbl = labels[key]
+
                     if len(matched_params) == 0:
+                        # print("This label didn't match:", key, "actual label", labels[key])
+                        # print("Debug: param_labels is", param_labels )
                         # if we have no matches, then likely we are not trying to
                         # fit to it, so we can safely skip
                         continue
 
-                    lbl = labels[key]
+                    # if lbl == 't3':
+                    #     breakpoint()
                     prim = prim_to_graph[lbl[0]].from_string_list(primitives[key])
                     if lbl not in param_data:
                         param_data[lbl] = {}
@@ -1942,6 +2423,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
     def _optimize_type_iteration(
         self,
+        optimize_during_typing=False,
         ignore_bits=None,
         use_gradients=True,
         split_strategy="spatial_reference",
@@ -1950,10 +2432,15 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
         jobtype = "GRADIENT"
 
+        candidates = []
+
         grad_new = 0
         grad = 0
         i = 0
         node = None
+
+        bit_gradients = []
+
         if ignore_bits is None:
             ignore_bits = {}
 
@@ -2019,18 +2506,26 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                     mintrust = self._po._options["mintrust"]
                     if self.trust0 < mintrust:
                         print("Reference gradient calculation failed; cannot continue!")
-                        return None, np.inf
+                        return None, np.inf, -np.inf
 
             obj = self._po.X
 
             grad_scale = 1.0
 
             grad = self._po.G
-            best = [None, grad * grad_scale, None]
+            best = [None, grad * grad_scale, obj, None, None, -1, None, None, self.db]
         else:
-            best = [None, np.inf, None]
+            best = [None, np.inf, np.inf, None, None, -1, None, None, self.db]
 
         self._combine_reference_data()
+
+        print("Assignments from initial FF:")
+        self.print_label_assignments()
+
+        current_ff = "type_split.offxml"
+        self.to_smirnoff_xml(current_ff, verbose=False)
+
+        self.to_smirnoff_xml(newff_name, verbose=False)
 
         while True:
             if use_gradients:
@@ -2038,9 +2533,81 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             i += 1
 
             success = True
-            olddb = self._po.db.copy()
+            olddb = copy.deepcopy(self._po.db)
+            old_param_db = copy.deepcopy(self.db)
 
             eps = 1.0
+
+            if use_gradients:
+                print("Running reference gradient calculation...")
+
+                # skip this since there was an optimization done immediately prior
+                newff_name = "newFF.offxml"
+                self.to_smirnoff_xml(newff_name, verbose=False)
+                # self._po._options["forcefield"] = [newff_name]
+
+                self._po._setup.ff_fname = newff_name
+                self._po.ff_fname = newff_name
+
+                self._po._init = False
+                if self.trust0 is None:
+                    self.trust0 = self._po._options.get("trust0", 0.1)
+                if self.finite_difference_h is None:
+                    self.finite_difference_h = self._po._options.get(
+                        "finite_difference_h", 0.01
+                    )
+                print("Setting trust0 to", self.trust0)
+                print("Setting finite_difference_h to", self.finite_difference_h)
+                while True:
+                    try:
+                        self._po.load_options(
+                            options_override={
+                                "trust0": self.trust0,
+                                "finite_difference_h": self.finite_difference_h,
+                            }
+                        )
+                        self._po.apply(jobtype=jobtype)
+
+                        # make sure to reset here so that the changes are picked
+                        # up in the single points when splitting via gradients
+                        self.to_smirnoff_xml(newff_name, verbose=False)
+                        self._po._setup.ff_fname = newff_name
+                        self._po.ff_fname = newff_name
+                        self._po._init = False
+                        break
+                    except RuntimeError:
+                        self._bump_zero_parameters(1e-3, names="epsilon")
+                        self.to_smirnoff_xml(newff_name, verbose=False)
+                        self._po._setup.ff_fname = newff_name
+                        self._po.ff_fname = newff_name
+                        self._po._init = False
+
+                        self.trust0 = self._po._options["trust0"] / 2.0
+                        self.finite_difference_h = (
+                            self._po._options["finite_difference_h"] / 2.0
+                        )
+                        print(
+                            "Reference gradient failed; reducing trust radius to",
+                            self.trust0,
+                            "finite_difference_h",
+                            self.finite_difference_h,
+                        )
+                        self._po._options["trust0"] = self.trust0
+                        self._po._options[
+                            "finite_difference_h"
+                        ] = self.finite_difference_h
+                        mintrust = self._po._options["mintrust"]
+                        if self.trust0 < mintrust:
+                            print(
+                                "Reference gradient calculation failed; cannot continue!"
+                            )
+                            return None, np.inf
+
+                obj = self._po.X
+
+                grad_scale = 1.0
+
+                grad = self._po.G
 
             if split_strategy == "spatial_reference":
                 key = "measure"
@@ -2055,13 +2622,17 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             elif use_gradients:
                 # this number is highly dependent on other parameters
                 # allow everything since we only accept if it lowers the grad
-                eps = 0.0
+                eps = 1e-14
                 key = None
                 # mode = "sum_difference"
-                mode = "mag_difference"
+                mode = ["sum_difference", "mag_difference"][::-1]
                 param_data, all_data = self._combine_optimization_data()
 
-            if ignore_parameters is not None:
+            if not self.gradient_assigned_only:
+                param_data = all_data
+
+            if ignore_parameters is not None and len(ignore_parameters):
+                print("Stripping parameters:", ignore_parameters)
                 param_data = {
                     k: v for k, v in param_data.items() if k[0] not in ignore_parameters
                 }
@@ -2069,14 +2640,23 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             # print("Ignore bits are")
             # for ignore, grads in ignore_bits.items():
             #     print(grads, ignore)
-            self.to_smirnoff_xml(None, verbose=True)
-            node = self._find_next_split(
-                param_data, key=key, ignore_bits=ignore_bits, mode=mode, eps=eps
+            self.to_smirnoff_xml(None, verbose=False)
+            node, score = self._find_next_split(
+                param_data,
+                key=key,
+                ignore_bits=ignore_bits,
+                mode=mode,
+                eps=eps,
+                bit_gradients=None,
             )
             print("Split is", node)
+            print("Score is", score)
 
             if node is None:
                 break
+
+            print("Assignments post split:")
+            self.print_label_assignments()
 
             if use_gradients:
                 # self._po._options["forcefield"] = [newff_name]
@@ -2100,9 +2680,16 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                     self._po.ff_fname = newff_name
 
                     self._po._init = False
+                    print("params names in FF pre:", self._po._forcefield.plist)
                     self._po.apply(jobtype=jobtype)
+                    ref_obj = self._po.X
+
+                    print("params names in FF post:", self._po._forcefield.plist)
                 except RuntimeError:
                     print("Gradient failed for this split; skipping")
+
+                    # if there is an exception, the po will have no data
+                    self._po.db = olddb
 
                     success = False
 
@@ -2111,36 +2698,102 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 if success:
                     grad_new = self._po.G
                     print(
-                        "grad_new",
+                        "\ngrad_new",
                         grad_new,
                         "grad",
                         grad,
-                        "grad_new < grad*scale?",
-                        grad_new - grad * grad_scale <= -eps,
+                        "grad_new > abs(grad*scale)?",
+                        np.abs(grad_new - grad * grad_scale) > eps,
                         grad_new - grad * grad_scale,
-                        -eps,
+                        eps,
                     )
 
-                    # current mode: take the best looking split
+                    if optimize_during_typing:
+                        try:
+                            print("Performing micro optimization for candidate")
+                            newff_name = "newFF.offxml"
+                            self.to_smirnoff_xml(newff_name, verbose=False)
+                            self.to_smirnoff_xml(
+                                "newFF" + str(i) + ".offxml", verbose=False
+                            )
+                            self._po._setup.ff_fname = newff_name
+                            self._po.ff_fname = newff_name
+                            self._po._init = False
+                            self._po.apply(jobtype="OPTIMIZE")
+                            obj = self._po.X
+                            grad_new_opt = self._po.G
+                            print("Objective after minimization:", self._po.X)
+                            self.load_new_parameters(self._po.new_ff)
+                            self.to_smirnoff_xml(newff_name, verbose=False)
+                            self._po._setup.ff_fname = newff_name
+                            self._po.ff_fname = newff_name
+                            self._po._init = False
+                        except RuntimeError as e:
+                            self.logger.error(str(e))
+                            self.logger.error(
+                                "Optimization failed; assuming bogus split"
+                            )
+                            obj = np.inf
+                            grad_new_opt = np.inf
+                            try:
+                                parent = self[node.parent]
+                            except KeyError as e:
+                                # breakpoint()
+                                pass
+
+                    # easy mode: take the best looking split
                     # best = [node, grad_new, node.parent, self.db[node.payload]]
                     # break
 
-                    # hard core mode: only take the one with the smaller grad
-                    if grad_new - best[1] <= -eps:
-                        best = [
-                            node.copy(),
-                            grad_new,
-                            node.parent,
-                            self.db[node.payload],
-                        ]
+                    # hard core mode: calc all and take the best best
+                    candidate = [
+                        node.copy(),
+                        grad_new,
+                        node.parent,
+                        self.db[node.payload].copy(),
+                        score,
+                        len(candidates),
+                        ref_obj,
+                        obj,
+                        copy.deepcopy(self.db),
+                        grad,
+                        grad_new_opt
+                    ]
+                    candidates.append(candidate)
+                    candidates = sorted(
+                        candidates, key=lambda x: np.abs(x[7]), reverse=False
+                    )
+                    print("Candidates so far (top wins):")
+                    for c in candidates:
+                        print(
+                            c[5],
+                            self[c[2]].payload,
+                            "->",
+                            c[0].payload,
+                            self.db[self[c[2]].payload]["data"]["group"].to_smarts(),
+                            "->",
+                            c[3]["data"]["group"].to_smarts(),
+                            c[1],
+                            c[9],
+                            c[10],
+                            c[4],
+                            c[6],
+                            c[7],
+                            "{:8.6f}%".format(100.0 * (c[7] - c[6]) / c[6]),
+                        )
+                    print(
+                        "Key is index, from_param, new_param, total_grad_ref, total_grad_split, total_grad_opt, grad_split_score initial_obj final_obj percent_change\n"
+                    )
 
                 # remove the previous term if it exists
                 print("Remove parameter", node)
+
                 self[node.parent].children.remove(node.index)
                 self.node_index.pop(node.index)
-                self.db.pop(node.payload)
 
-                newff_name = "newFF.offxml"
+                self.load_new_parameters(current_ff)
+                
+                newff_name = current_ff
                 self.to_smirnoff_xml(newff_name, verbose=False)
                 # self._po._options["forcefield"] = [newff_name]
 
@@ -2148,39 +2801,82 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 self._po.ff_fname = newff_name
                 self._po._init = False
 
-                # if there is an exception, the po will have no data
-
-                self._po.db = olddb
             else:
-                best = [node, np.inf, node.parent, self.db[node.payload]]
+                best = [
+                    node,
+                    np.inf,
+                    node.parent,
+                    self.db[node.payload],
+                    score,
+                    0,
+                    np.inf,
+                    np.inf,
+                    self.db
+                ]
+                candidates = [best]
                 # hack so that we add it using the common path below
                 self[node.parent].children.remove(node.index)
                 self.node_index.pop(node.index)
                 self.db.pop(node.payload)
                 break
 
-        if best[0] is not None:
+        if len(candidates):
+
+            # TODO: still unclear if the split with the highest or lowest grad
+            # change is best
+            best = sorted(candidates, key=lambda x: x[7], reverse=False)[0]
             # only re-add if we did a complete scan, since we terminate that case
             # with no new node, and the best has to be re-added
             # if we break early, the node is already there
             # I think nodes need to be prepended to conserve hierarchy
             # for example, if we split a param, do we want it to override
             # all children? no, since we were only focused on the parent, so
-            # we only care that the split node comes before *only* the parent,
+            # we only care that the split node comes after *only* the parent,
             # which is true since it is a child
             self.add(best[2], best[0], index=0)
-            self.db[best[0].payload] = best[3]
+            self.db = best[8]
+            # self.db[best[0].payload] = best[3]
+
+            print("All candidates (top wins):")
+            for c in candidates:
+                print(
+                    c[5],
+                    self[c[2]].payload,
+                    "->",
+                    c[0].payload,
+                    self.db[self[c[2]].payload]["data"]["group"].to_smarts(),
+                    "->",
+                    c[3]["data"]["group"].to_smarts(),
+                    c[1],
+                    c[9],
+                    c[10],
+                    c[4],
+                    c[6],
+                    c[7],
+                    "{:8.6f}%".format(100.0 * (c[7] - c[6]) / c[6]),
+                )
+            print(
+                "Key is index, from_param, new_param, total_grad_ref, total_grad_split, total_grad_opt, grad_split_score initial_obj final_obj percent_change\n"
+            )
 
             print("Best split parameter")
             print(best[0])
             print("Best split gradient", best[1])
+            print("Best split score", best[4])
+            print(
+                "Best split objective drop {}".format(
+                    100.0 * (best[7] - best[6]) / best[6]
+                )
+            )
 
-        newff_name = "newFF.offxml"
-        self.to_smirnoff_xml(newff_name, verbose=False)
+        # newff_name = "newFF.offxml"
+        # self.db = best[8]
+        # self.to_smirnoff_xml(newff_name, verbose=False)
 
-        self._po._setup.ff_fname = newff_name
-        self._po._init = False
-        return best[0], best[1]
+        # self._po._setup.ff_fname = newff_name
+        # self._po._init = False
+
+        return best[0], best[1], best[7]
 
     def _set_parameter_spatial(self, param_name, value, report_only=False):
 
@@ -2602,7 +3298,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             while True:
                 i += 1
                 try:
-                    node, grad_split = self._optimize_type_iteration(
+                    node, grad_split, score = self._optimize_type_iteration(
+                        optimize_during_typing=False,
                         ignore_bits=ignore_bits,
                         split_strategy="spatial_reference",
                         use_gradients=False,
@@ -2631,7 +3328,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                         self.db[parent.payload]["data"]["group"]
                         - self.db[node.payload]["data"]["group"]
                     )
-                    ignore_bits[bit] = []
+                    ignore_bits[(None, bit)] = [None, None]
                     # the db is in a null state, and causes failures
                     # TODO allow skipping an optimization
                     # reset the ignore bits since we found a good move
@@ -2661,7 +3358,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             while True:
                 i += 1
                 try:
-                    node, grad_split = self._optimize_type_iteration(
+                    node, grad_split, score = self._optimize_type_iteration(
+                        optimize_during_typing=False,
                         ignore_bits=ignore_bits,
                         split_strategy="force_reference",
                         use_gradients=False,
@@ -2689,7 +3387,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                         self.db[parent.payload]["data"]["group"]
                         - self.db[node.payload]["data"]["group"]
                     )
-                    ignore_bits[bit] = []
+                    print("Adding ", bit, "to ignore")
+                    ignore_bits[(None, bit)] = [None, None]
                     # the db is in a null state, and causes failures
                     # TODO allow skipping an optimization
                     # reset the ignore bits since we found a good move
@@ -2718,8 +3417,166 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             break
         # print("Final objective is", obj, "initial was", initial)
         # print("Total drop is", obj - initial)
-        self.to_smirnoff_xml(newff_name, verbose=True)
+        self.to_smirnoff_xml(newff_name, verbose=False)
         self.to_pickle()
+
+    def _optimize_microstep(self):
+        """
+        generate a possible manipulation
+
+        this should return a generator?
+
+        produces a manipulation as a partial or an obj with callable
+        """
+
+    def _optimize_step(self):
+        """
+        perform a single manipulation to the FF hierarchy which improves
+        the agreement with the reference data
+
+        this can be a split, combine, or swap
+        this can be evaluated using FB, which uses either the objective or its
+        following up with its gradient
+
+        this should apply the step
+            another subroutine should produce the candiates
+            this function chooses the one to apply
+        """
+
+        ignore_bits = {}
+        ignore_bits_optimized = {}
+
+        # this is give me the actual parameter as a node, or a combine?
+        # node should be a tree manipulation
+        # returns a partial with a parent, node, aux_node which can either
+        # add node to parent, remove node from parent, or swap node and aux
+        # under parent
+
+        # self._optimize_type_iteration(
+        #     ignore_bits=ignore_bits,
+        #     split_strategy="gradient",
+        #     use_gradients=True,
+        # )
+        # # node, grad_split = self._optimize_type_iteration(
+        # #     ignore_bits=ignore_bits,
+        # #     split_strategy="gradient",
+        # #     use_gradients=True,
+        # # )
+
+        # if node is None:
+        #     print("No new parameter split, done!")
+        #     break
+
+        # # evaluate the change to the FF
+        # jobtype = "OPTIMIZE" if optimize_during_typing else "GRADIENT"
+        # self._po.apply(jobtype=jobtype)
+        # new_obj, new_grad = self._po.X, self._po.G
+
+        # # decide to keep the new node
+        # grad_scale_factor = 1.0
+        # if (obj > ref and optimize_during_typing) or (
+        #     grad_split > ref_grad * grad_scale_factor
+        #     and not optimize_during_typing
+        # ):
+        #     # reject steps where the objective goes up
+
+        #     self._po.new_ff = current_ff
+
+        #     self.to_smirnoff_xml(newff_name, verbose=False)
+        #     self._po._setup.ff_fname = newff_name
+        #     self._po.ff_fname = newff_name
+        #     self._po._init = False
+        #     print(
+        #         "Rejecting iteration", i, "objective reference still", ref
+        #     )
+        #     # self._plot_gradients(fname_prefix=str(i) + ".reject")
+        #     # self.to_smirnoff_xml("newFF" + str(i) + ".reject.offxml")
+        #     parent = self[node.parent]
+        #     bit = (
+        #         self.db[parent.payload]["data"]["group"]
+        #         - self.db[node.payload]["data"]["group"]
+        #     )
+        #     try:
+        #         # patch; assume everything is correct and we can
+        #         # just add symmetric cases without issue
+        #         if bit not in ignore_bits:
+        #             ignore_bits[bit] = []
+        #         ignore_bits_optimized[bit] = ignore_bits[bit]
+        #     except KeyError as e:
+        #         # probably a torsion or something that caused
+        #         # the bit calculation to fail
+        #         print(e)
+
+        #     print("Keeping ignore bits for next iteration:")
+        #     for bit, bit_grad in ignore_bits_optimized.items():
+        #         print(bit_grad, bit)
+
+        #     # ignore_bits will keep track of things that didn't work
+        #     # do this after keeping the ignore bits since we access
+        #     # the info
+        #     self[node.parent].children.remove(node.index)
+        #     self.node_index.pop(node.index)
+        #     self.db.pop(node.payload)
+
+        #     # reset the physical terms after resetting the tree
+        #     self.load_new_parameters(current_ff)
+
+        #     if optimize_during_typing:
+        #         ignore_bits = ignore_bits_optimized.copy()
+        # else:
+        #     # reset the ignore bits since we found a good move
+
+        #     ignore_bits_optimized = {}
+        #     ignore_bits = {}
+        #     print("Keeping iteration", i, "objective:", obj)
+        #     print("Split kept is")
+        #     print(node)
+        #     ref = obj
+        #     ref_grad = grad_split
+        #     # self._plot_gradients(fname_prefix=str(i) + ".accept")
+        #     self.to_smirnoff_xml("newFF" + str(i) + ".accept.offxml")
+        #     self.to_pickle()
+
+        # return report
+
+    class OptimizationStepReport:
+
+        __slots__ = ["success", "X", "G", "H", "log_str"]
+
+        def __init__(self):
+            self.success: bool = None
+            self.X: float = None
+            self.G: float = None
+            self.H: float = None
+            self.log_str: str = None
+
+        def print_result(self):
+            print(self.X, self.G, self.H)
+            print(self.log_str)
+
+    def optimize_v2(
+        self,
+        optimize_types=True,
+        optimize_parameters=False,
+        optimize_during_typing=True,
+        optimize_initial=True,
+    ):
+
+        self._po.apply(jobtype=jobtype)
+        obj, ref_grad = self._po.X, self._po.G
+        self.load_new_parameters(self._po.new_ff)
+
+        # this should force a reinit the forcefield but not the targets
+        self._po.reset()
+
+        success = True
+        i = 0
+        while success:
+            print("Macroiteration", i)
+            report = self._optimize_step()
+            success = report.success
+            report.print_result()
+            i += 1
 
     def optimize(
         self,
@@ -2737,66 +3594,79 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         self._po.ff_fname = newff_name
         self._po._init = False
 
-        self.trust0 = 0.25
-        self.finite_difference_h = 0.01
+        self.trust0 = None
+        self.finite_difference_h = None
 
         jobtype = "OPTIMIZE"
         if not optimize_initial:
             jobtype = "GRADIENT"
 
-        if optimize_types:
-            print("Performing initial FF fit...")
-            while True:
-                try:
+        initial = None
+        # fill in the parameters with bits so we don't we waste time splitting
+        # terms
+
+        # how to do this?
+        # we turn off every bit possible that keeps the same coverage. This is
+        # already done for non-leaf parameters
+        # we go to each leaf, then split all the way to primitives?
+        #
+
+        print("Performing initial objective calculation...")
+        while True:
+            try:
+                if self.trust0 is not None and self.finite_difference_h is not None:
                     self._po.load_options(
                         options_override={
                             "trust0": self.trust0,
                             "finite_difference_h": self.finite_difference_h,
                         }
                     )
-                    self._po.apply(jobtype=jobtype)
-                    break
-                except RuntimeError:
-                    self._bump_zero_parameters(1e-3, names="epsilon")
-                    self.to_smirnoff_xml(newff_name, verbose=False)
-                    self._po._setup.ff_fname = newff_name
-                    self._po.ff_fname = newff_name
-                    self._po._init = False
-                    self.trust0 = self._po._options["trust0"] / 2.0
+                self._po.apply(jobtype=jobtype)
+                self.trust0 = self._po._options["trust0"]
+                self.finite_difference_h = self._po._options["finite_difference_h"]
+                break
+            except RuntimeError:
+                self._bump_zero_parameters(1e-3, names="epsilon")
+                self.to_smirnoff_xml(newff_name, verbose=False)
+                self._po._setup.ff_fname = newff_name
+                self._po.ff_fname = newff_name
+                self._po._init = False
+                self.trust0 = self._po._options["trust0"] / 2.0
+                self.finite_difference_h = self._po._options["finite_difference_h"] / 2.0
+                print(
+                    "Initial optimization failed; reducing trust radius to",
+                    self.trust0,
+                )
+                self._po._options["trust0"] = self.trust0
+                mintrust = self._po._options["mintrust"]
+                if self.trust0 < mintrust:
                     print(
-                        "Initial optimization failed; reducing trust radius to",
-                        self.trust0,
-                    )
-                    self._po._options["trust0"] = self.trust0
-                    mintrust = self._po._options["mintrust"]
-                    if self.trust0 < mintrust:
-                        print(
-                            "Trust radius below minimum trust of {}; cannot proceed.".format(
-                                mintrust
-                            )
+                        "Trust radius below minimum trust of {}; cannot proceed.".format(
+                            mintrust
                         )
-                        return
-            self.finite_difference_h = self._po._options["finite_difference_h"]
+                    )
+                    return
+        self.finite_difference_h = self._po._options["finite_difference_h"]
 
-            print("Initial objective after first fit:", self._po.X)
-            obj = self._po.X
-            ref = obj
-            initial = obj
-            ref_grad = self._po.G
+        print("Initial objective :", self._po.X)
+        obj = self._po.X
+        ref = obj
+        initial = obj
+        ref_grad = self._po.G
 
-            newff_name = "newFF.offxml"
-            self.load_new_parameters(self._po.new_ff)
-            self.to_pickle()
-            self.to_smirnoff_xml(newff_name, verbose=False)
-            self._po._setup.ff_fname = newff_name
-            self._po._init = False
+        newff_name = "newFF.offxml"
+        self.load_new_parameters(self._po.new_ff)
+        self.to_pickle()
+        self.to_smirnoff_xml(newff_name, verbose=False)
+        self._po._setup.ff_fname = newff_name
+        self._po._init = False
 
-            ignore_bits = {}
-            ignore_bits_optimized = {}
+        ignore_bits = {}
+        ignore_bits_optimized = {}
 
-            # self._plot_gradients(fname_prefix="0")
+        # self._plot_gradients(fname_prefix="0")
 
-            # this ref is prior to splitting
+        if optimize_types:
             i = 0
             if False:
                 pass
@@ -2809,7 +3679,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                     current_ff = self._po.new_ff
 
                     try:
-                        node, grad_split = self._optimize_type_iteration(
+                        node, grad_split, score = self._optimize_type_iteration(
+                            optimize_during_typing=optimize_during_typing,
                             ignore_bits=ignore_bits,
                             split_strategy="gradient",
                             use_gradients=True,
@@ -2819,24 +3690,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                             print("No new parameter split, done!")
                             break
 
-                        if optimize_during_typing:
-                            print("Performing micro optimization for new split")
-                            newff_name = "optimize.offxml"
-                            self.to_smirnoff_xml(newff_name, verbose=True)
-                            self.to_smirnoff_xml(
-                                "newFF" + str(i) + ".offxml", verbose=False
-                            )
-                            self._po._setup.ff_fname = newff_name
-                            self._po.ff_fname = newff_name
-                            self._po._init = False
-                            self._po.apply(jobtype="OPTIMIZE")
-                            obj = self._po.X
-                            print("Objective after minimization:", self._po.X)
-                            self.load_new_parameters(self._po.new_ff)
-                            self.to_smirnoff_xml(newff_name, verbose=False)
-                            self._po._setup.ff_fname = newff_name
-                            self._po.ff_fname = newff_name
-                            self._po._init = False
+                        obj = score
+
                     except RuntimeError as e:
                         self.logger.error(str(e))
                         self.logger.error("Optimization failed; assuming bogus split")
@@ -2851,11 +3706,17 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                             self.db[parent.payload]["data"]["group"]
                             - self.db[node.payload]["data"]["group"]
                         )
-                        ignore_bits[bit] = []
+                        ignore_bits[(None, bit)] = []
                         # the db is in a null state, and causes failures
                         # TODO allow skipping an optimization
 
-                    print("New objective:", obj, "Delta is", obj - ref)
+                    print(
+                        "New objective:",
+                        obj,
+                        "Delta is",
+                        obj - ref,
+                        "({:8.2f}%)".format(100.0 * ((obj - ref) / ref)),
+                    )
                     print(
                         "New objective gradient from split:",
                         grad_split,
@@ -2863,8 +3724,13 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                         ref_grad,
                         "Delta is",
                         grad_split - ref_grad,
+                        "({:8.2f}%)".format(
+                            100.0 * ((grad_split - ref_grad) / ref_grad)
+                        ),
                     )
+                    print("Parameter score is ", score)
                     grad_scale_factor = 1.0
+
                     if (obj > ref and optimize_during_typing) or (
                         grad_split > ref_grad * grad_scale_factor
                         and not optimize_during_typing
@@ -2873,6 +3739,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
                         self._po.new_ff = current_ff
 
+                        
                         self.to_smirnoff_xml(newff_name, verbose=False)
                         self._po._setup.ff_fname = newff_name
                         self._po.ff_fname = newff_name
@@ -2890,17 +3757,20 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                         try:
                             # patch; assume everything is correct and we can
                             # just add symmetric cases without issue
-                            if bit not in ignore_bits:
-                                ignore_bits[bit] = []
-                            ignore_bits_optimized[bit] = ignore_bits[bit]
+                            if bit not in [x[1] for x in ignore_bits]:
+                                print("Adding ", bit, "to ignore")
+                                ignore_bits[(None, bit)] = [None, None]
+                            ignore_bits_optimized[(None, bit)] = ignore_bits[
+                                (None, bit)
+                            ]
                         except KeyError as e:
                             # probably a torsion or something that caused
                             # the bit calculation to fail
                             print(e)
 
                         print("Keeping ignore bits for next iteration:")
-                        for bit, bit_grad in ignore_bits_optimized.items():
-                            print(bit_grad, bit)
+                        for (lbl, bit), bit_grad in ignore_bits_optimized.items():
+                            print(lbl, bit_grad, bit)
 
                         # ignore_bits will keep track of things that didn't work
                         # do this after keeping the ignore bits since we access
@@ -2927,10 +3797,15 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                         # self._plot_gradients(fname_prefix=str(i) + ".accept")
                         self.to_smirnoff_xml("newFF" + str(i) + ".accept.offxml")
                         self.to_pickle()
-            print("Final objective is", obj, "initial was", initial)
-            print("Total drop is", obj - initial)
             self.to_smirnoff_xml(newff_name, verbose=True)
             self.to_pickle()
+            self.print_label_assignments()
+            print("Final objective is", obj, "initial was", initial)
+            print(
+                "Total drop is",
+                obj - initial,
+                "{:8.2f}%".format(100.0 * (obj - initial) / initial),
+            )
             print("Splitting done")
 
             # while True:
@@ -2964,8 +3839,10 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             #             )
             #             return
 
-        if optimize_parameters:
-            if not optimize_types:
+        # since we presumably just finished an optimization from a split, I think
+        # we can skip the final optimization
+        if optimize_parameters and not (optimize_types and optimize_during_typing):
+            if not optimize_parameters:
                 while True:
                     try:
                         self._po.apply(jobtype="GRADIENT")
@@ -2998,7 +3875,9 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                         break
                     except RuntimeError as e:
                         self.trust0 = self._po._options["trust0"] / 2.0
-                        print("Optimization failed; reducing trust radius to", self.trust0)
+                        print(
+                            "Optimization failed; reducing trust radius to", self.trust0
+                        )
                         self._po._options["trust0"] = self.trust0
                         mintrust = self._po._options["mintrust"]
                         if self.trust0 < mintrust:
@@ -3023,10 +3902,17 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             self.load_new_parameters(self._po.new_ff)
             newff_name = "newFF.offxml"
             # self._plot_gradients(fname_prefix="optimized.final")
-            print("Optimized objective is", obj, "initial was", initial)
-            print("Total drop is", obj - initial)
             self.to_smirnoff_xml(newff_name, verbose=True, renumber=False)
             self.to_pickle()
+            if initial is None:
+                print("Optimized objective is", obj)
+            else:
+                print("Optimized objective is", obj, "initial was", initial)
+                print(
+                    "Total drop is",
+                    obj - initial,
+                    "{:8.2f}%".format(100.0 * (obj - initial) / initial),
+                )
 
     @classmethod
     def from_smirnoff(self, input):
@@ -3034,6 +3920,11 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
     def set_physical_optimizer(self, obj):
         self._po = obj
+
+        #
+        # need the optimizer that should just try until it works
+        #
+        self._po.raise_on_error = False
 
     def set_smarts_generator(self, obj):
         self._to = obj
