@@ -4,7 +4,7 @@ import logging
 import lzma
 import bz2
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from itertools import zip_longest
 from pprint import pformat
 
@@ -332,7 +332,7 @@ def submit_qca_optimization_dataset(
         add_compute_specs(ds, specs)
 
     if input_molecules is not None:
-        pool = ThreadPoolExecutor(max_workers=threads)
+        pool = ProcessPoolExecutor(max_workers=threads)
 
         new_mols = 0
         new_calcs = 0
