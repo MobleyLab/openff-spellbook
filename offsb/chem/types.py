@@ -187,7 +187,7 @@ class BitVec:
         if self.inv:
             return not self._v.any()
         else:
-            return self._v.all()
+            return self._v.all() and self.maxbits <= self._v.shape[0]
 
     def any(self):
         return self.inv or self._v.any()
@@ -1265,7 +1265,7 @@ class BondType(ChemType):
         if order is None:
             order = BitVec()
         if aA is None:
-            aA = BitVec()
+            aA = BitVec(maxbits=2)
         self._order = order
         self._aA = aA
         super().__init__(inv=inv)
