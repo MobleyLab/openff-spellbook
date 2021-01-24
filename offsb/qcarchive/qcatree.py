@@ -5,6 +5,7 @@ from datetime import datetime
 
 import tqdm
 
+import offsb.search.smiles
 import offsb.treedi.node as Node
 import offsb.treedi.tree as Tree
 from offsb.treedi.tree import DebugDict
@@ -57,6 +58,38 @@ def wrap_fn_hessian(fn, i, j, **kwargs):
     # out_str = prestr + poststr
     return objs
     # return objs, out_str, N
+
+
+class QCAFilter:
+
+    __slots__ = ["types", "smarts", "entries", "records", "datasets"]
+
+    def __init__(self):
+
+        self.types = []
+        self.smarts = []
+        self.entries = []
+        self.records = []
+        self.datasets = []
+
+    @classmethod
+    def from_file(cls, fnm):
+        obj = cls()
+        with open(fnm) as f:
+            for line in f:
+                tokens = line.split()
+                key = tokens[0]
+
+                # since datanames can have spaces in the names, assume
+                # one per line
+                if key == "datasets":
+                    values = [" ".join(tokens[1:])]
+                else:
+                    values = tokens[1:]
+
+                attr = getattr(obj, key)
+                attr.extend(values)
+        return obj
 
 
 class QCATree(Tree.Tree):
@@ -217,7 +250,7 @@ class QCATree(Tree.Tree):
         if drop is not None:
             self.drop = drop
         else:
-            self.drop = []
+            self.drop = QCAFilter()
 
         node = self[nid]
         payload = self
@@ -226,8 +259,6 @@ class QCATree(Tree.Tree):
 
         fn = self.vtable(obj)
         fn(nid, skel=skel, **kwargs)
-
-        self.drop = []
 
     def node_iter_entry(
         self,
@@ -321,7 +352,9 @@ class QCATree(Tree.Tree):
 
         return len(ids_flat)
 
-    def _cache_obj(self, client_fn, nodes=None, fn=Tree.Tree.node_iter_depth_first, select=None):
+    def _cache_obj(
+        self, client_fn, nodes=None, fn=Tree.Tree.node_iter_depth_first, select=None
+    ):
 
         """
         Generate method to cache results depending on select.
@@ -402,12 +435,16 @@ class QCATree(Tree.Tree):
             else:
                 self.db[key]["data"] = val
 
-    def _cache_molecules(self, nodes=None, fn=Tree.Tree.node_iter_depth_first, select=None):
+    def _cache_molecules(
+        self, nodes=None, fn=Tree.Tree.node_iter_depth_first, select=None
+    ):
         client = self.db["ROOT"]["data"]
         client_fn = client.query_molecules
         self._cache_obj(client_fn, nodes=nodes, fn=fn, select=select)
 
-    def _cache_results(self, nodes=None, fn=Tree.Tree.node_iter_depth_first, select=None):
+    def _cache_results(
+        self, nodes=None, fn=Tree.Tree.node_iter_depth_first, select=None
+    ):
         client = self.db["ROOT"]["data"]
         client_fn = client.query_results
         self._cache_obj(client_fn, nodes=nodes, fn=fn, select=select)
@@ -434,6 +471,7 @@ class QCATree(Tree.Tree):
                 self.db[key]["data"] = val
 
         return len(fresh_obj_map)
+
     def cache_minimum_gradients(self, nodes, iter_fn=None):
         client = self.db["ROOT"]["data"]
         return self._cache_minimum(
@@ -769,15 +807,58 @@ class QCATree(Tree.Tree):
     def branch_ds(self, nid, name, fn, skel=False, start=0, limit=0, keep_specs=None):
         """ Generate the individual entries from a dataset """
 
-        if "Entry" in self.drop:
+        if "Entry" in self.drop.types:
             return
         suf = "QCP-"
         ds_node = self[nid]
         ds = self.db[ds_node.payload]["data"]
         ds_specs = ds.data.specs
-        records = ds.data.records
+        records = ds.data.records.copy()
+
+        if len(self.drop.entries):
+
+            filter = [
+                rec
+                for rec, entry in records.items()
+                if entry.name in self.drop.entries
+            ]
+            print("Entry name filter removing {:d} entries from ds {:s}:".format(len(filter), name))
+            for entry_name in filter:
+                print(entry_name)
+
+            records = {
+                rec: entry
+                for rec, entry in records.items()
+                if rec not in filter
+            }
+            print("Entries: {}/{}".format(len(records), len(ds.data.records)))
+
+        if len(self.drop.smarts):
+
+            CIEHMS = "canonical_isomeric_explicit_hydrogen_mapped_smiles"
+            filter = [
+                rec
+                for rec, entry in records.items()
+                if offsb.search.smiles.smarts_in_smiles(
+                    self.drop.smarts, entry.attributes[CIEHMS]
+                )
+            ]
+            print("SMARTS filter removing {:d} entries from ds {:s}:".format(len(filter), name))
+            for entry_name in filter:
+                print(entry_name)
+
+            records = {rec: entry for rec, entry in records.items() if rec not in filter}
+            print("Entries: {}/{}".format(len(records), len(ds.data.records)))
+
         if limit > 0 and limit < len(records):
-            records = dict(list(records.items())[start : start + limit])
+            print("Limit filter removing all not between {} and {}".format(start, start+limit))
+            records = dict(list(records.items())[start: start + limit])
+            print("Entries: {}/{}".format(len(records), len(ds.data.records)))
+
+        if len(records) != len(ds.data.records):
+            print("Entries remaining:")
+            for i, (rec,entry) in enumerate(records.items()):
+                print("INDEXED {:8d} {:64s} {:s}".format(i, entry.attributes["canonical_isomeric_smiles"], rec))
 
         client = self.db["ROOT"]["data"]
 
@@ -806,8 +887,8 @@ class QCATree(Tree.Tree):
         ids = flatten_list(list(spec_map_ids.values()), times=-1)
 
         n_ids = len(ids)
-        filtered_ids = [i for i in ids if i.split('-')[1] in self.drop]
-        ids = [i for i in ids if i.split('-')[1] not in self.drop]
+        filtered_ids = [i for i in ids if i.split("-")[1] in self.drop.records]
+        ids = [i for i in ids if i.split("-")[1] not in self.drop.records]
         n_filtered = n_ids - len(ids)
 
         print("Downloading", name, "information for", len(ids), end=" ")
@@ -825,7 +906,7 @@ class QCATree(Tree.Tree):
         # init_mol_ids = [obj.initial_molecule for obj in obj_map.values()]
         init_mol_map = None
 
-        if "Molecule" not in self.drop or "Initial" not in self.drop:
+        if "Molecule" not in self.drop.types or "Initial" not in self.drop.types:
             init_mol_ids = [obj.initial_molecule for obj in obj_map.values()]
             init_mols_are_lists = False
             if isinstance(init_mol_ids[0], list):
@@ -857,7 +938,7 @@ class QCATree(Tree.Tree):
             self.db[pl_name] = DEFAULT_DB({"data": record})
 
             # add the specs for this entry
-            if "Specification" in self.drop:
+            if "Specification" in self.drop.types:
                 return
             for spec, procedures in spec_map_ids.items():
                 pl_name = "QCS-" + str(spec)
@@ -866,7 +947,7 @@ class QCATree(Tree.Tree):
                 # self[pl_name] = DEFAULT_DB({"data": ds_specs[spec.lower()]})
                 self[pl_name] = DEFAULT_DB({"data": ds_specs[spec.lower()]})
 
-                if name in self.drop:
+                if name in self.drop.datasets:
                     return
 
                 # if the spec is not here, then somehow data was never
@@ -915,7 +996,6 @@ class QCATree(Tree.Tree):
         if dereference is None:
             dereference = self.dereference
 
-
         if nodes is None:
             nodes = self.root()
 
@@ -928,7 +1008,7 @@ class QCATree(Tree.Tree):
                 if i in node.payload:
                     ret.append(node)
         if dereference:
-            ret = [self.db[x.payload]['data'] for x in ret]
+            ret = [self.db[x.payload]["data"] for x in ret]
 
         return ret
 
@@ -952,7 +1032,7 @@ class QCATree(Tree.Tree):
         """Generate the optimizations under Grid Optimization record
         The optimizations are separated by one or more Constraints
         """
-        if "GridOpt" in self.drop:
+        if "GridOpt" in self.drop.types:
             return
 
         client = self.db["ROOT"]["data"]
@@ -967,15 +1047,12 @@ class QCATree(Tree.Tree):
         ids = flatten_list(opt_ids, times=-1)
         n_ids = len(ids)
 
-        filtered_ids = [i for i in ids if i.split('-')[1] in self.drop]
-        ids = [i for i in ids if i.split('-')[1] not in self.drop]
+        filtered_ids = [i for i in ids if i.split("-")[1] in self.drop.records]
+        ids = [i for i in ids if i.split("-")[1] not in self.drop.records]
 
         n_filtered = n_ids - len(ids)
 
-        print(
-            "Downloading optimization information for",
-            len(ids), end=" "
-        )
+        print("Downloading optimization information for", len(ids), end=" ")
         if n_filtered > 0:
             print("(filtered {:d})".format(n_filtered))
             for i in filtered_ids:
@@ -991,7 +1068,7 @@ class QCATree(Tree.Tree):
         )
 
         # add the constraint nodes
-        if "Constraint" in self.drop:
+        if "Constraint" in self.drop.types:
             return
         opt_nodes = []
 
@@ -1042,7 +1119,7 @@ class QCATree(Tree.Tree):
         Generate the optimizations under a TD or an Opt dataset
         The optimizations are separated by a Constraint
         """
-        if "Optimization" in self.drop:
+        if "Optimization" in self.drop.types:
             return
 
         if not hasattr(nids, "__iter__"):
@@ -1068,8 +1145,8 @@ class QCATree(Tree.Tree):
 
         ids = flat_ids
         n_ids = len(ids)
-        filtered_ids = [i for i in ids if i in self.drop]
-        ids = [i for i in ids if i not in self.drop]
+        filtered_ids = [i for i in ids if i in self.drop.records]
+        ids = [i for i in ids if i not in self.drop.records]
         n_filtered = n_ids - len(ids)
 
         print("Downloading optimization information for", len(ids))
@@ -1087,7 +1164,7 @@ class QCATree(Tree.Tree):
         )
 
         # add the constraint nodes
-        if "Constraint" in self.drop:
+        if "Constraint" in self.drop.types:
             return
         opt_nodes = []
 
@@ -1112,7 +1189,9 @@ class QCATree(Tree.Tree):
                     # skip if filtered from above
                     obj = opt_map.get(index)
                     if obj is None:
-                        self.logger.warn("A TD optimization was filtered! ID {}".format(index))
+                        self.logger.warn(
+                            "A TD optimization was filtered! ID {}".format(index)
+                        )
                         continue
                     opt_node = Node.Node(name="Optimization", payload=index)
                     opt_nodes.append(opt_node)
@@ -1128,7 +1207,7 @@ class QCATree(Tree.Tree):
 
         if nids is None:
             return
-        if "Gradient" in self.drop:
+        if "Gradient" in self.drop.types:
             return
         suf = "QCR-"
         if not hasattr(nids, "__iter__"):
@@ -1136,7 +1215,7 @@ class QCATree(Tree.Tree):
         print("Parsing optimation trajectory records from index...")
         nodes = [self[nid] for nid in nids]
         try:
-            if "Intermediates" in self.drop:
+            if "Intermediates" in self.drop.types:
                 result_ids = []
                 for node in nodes:
                     ids = self.db[node.payload]["data"].trajectory
@@ -1204,7 +1283,7 @@ class QCATree(Tree.Tree):
                 # print("QCA: This optimization failed (" + node.payload + ")")
                 continue
             if traj is not None and len(traj) > 0:
-                if "Intermediates" in self.drop:
+                if "Intermediates" in self.drop.types:
                     traj = traj[-1:]
                 for index in traj:
                     index = suf + index
@@ -1239,7 +1318,7 @@ class QCATree(Tree.Tree):
         if len(nids) == 0:
             print("No gradients!")
             return
-        if "Molecule" in self.drop:
+        if "Molecule" in self.drop.types:
             return
         nodes = [self[nid] for nid in nids]
         client = self.db["ROOT"]["data"]
@@ -1324,7 +1403,7 @@ class QCATree(Tree.Tree):
             assert len(node.children) > 0
 
         # hessian stuff
-        if "Hessian" in self.drop:
+        if "Hessian" in self.drop.types:
             return
 
         ids = [x.payload for x in mol_nodes]
@@ -1399,7 +1478,12 @@ class QCATree(Tree.Tree):
                 if len(opt_node.children) > 0:
                     # bit ugly, but it is taking the last gradient record, and
                     # the first (and only) molecule from it
-                    yield from fn(self, self[opt_node.children[-1]], select=select, dereference=dereference)
+                    yield from fn(
+                        self,
+                        self[opt_node.children[-1]],
+                        select=select,
+                        dereference=dereference,
+                    )
 
     def node_iter_contraints(self, nodes, fn=Tree.Tree.node_iter_depth_first):
         yield from fn(self, nodes, select="Constraint")
