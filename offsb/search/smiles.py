@@ -14,6 +14,15 @@ import logging
 DEFAULT_DB = Tree.DEFAULT_DB
 
 
+def smarts_in_smiles(sma, smi) -> bool:
+
+    if type(sma) is str:
+        sma = [sma]
+
+    mol = offsb.rdutil.mol.build_from_smiles(smi)
+    return any([mol.HasSubstructMatch(Chem.MolFromSmarts(s)) for s in sma])
+
+
 class SmilesSearchTree(Tree.PartitionTree):
     """
     Just a quick way to get the indices and apply them to the entries
