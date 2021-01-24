@@ -175,7 +175,14 @@ def expand_smiles_to_qcschema(
         # we are collecting molecules by their specific stereoisomer SMILES
         for smi in smi_list:
             try:
-                molecule_set[smi] = [Molecule.from_smiles(smi)]
+                # this is ridiculous; we enumerated stereoisomers previously,
+                # but we still fail to build the molecule. Silently allow...
+                # note that this is likely because there is still bond 
+                # stereochemistry
+                lvl = logging.getLogger("openforcefield").getEffectiveLevel()
+                logging.getLogger("openforcefield").setLevel(logging.ERROR)
+                molecule_set[smi] = [Molecule.from_smiles(smi, allow_undefined_stereo=True)]
+                logging.getLogger("openforcefield").setLevel(lvl)
             except openforcefield.utils.toolkits.UndefinedStereochemistryError:
                 # RDKit was unable to determine chirality? Skip...
                 pass
@@ -282,6 +289,7 @@ def main():
         "-c",
         "--cutoff",
         type=float,
+        default=9999.0,
         help="Prune conformers less than this cutoff using all pairwise RMSD comparisons (in Angstroms)",
     )
 
@@ -289,6 +297,7 @@ def main():
         "-n",
         "--max-conformers",
         type=int,
+        default=1,
         help="The number of conformations to attempt generating",
     )
 
@@ -311,9 +320,9 @@ def main():
         "-H",
         "--header-lines",
         type=int,
+        default=0,
         help=""" The number of lines at the top of the file to skip before data
         begins""",
-        default=0,
     )
 
     parser.add_argument(
