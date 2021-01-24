@@ -441,6 +441,7 @@ class ForceBalanceObjectiveTorsionDriveSetup(offsb.treedi.tree.TreeOperation):
             + "\nattenuate"
             + "\nenergy_denom 1.0"
             + "\nenergy_upper 5.0"
+            + "\nrestrain_k 0.0"
             + "\nremote 1"
             + "\n$end"
         )
@@ -661,7 +662,7 @@ class ForceBalanceObjectiveTorsionDriveSetup(offsb.treedi.tree.TreeOperation):
         rdkit_logger = logging.getLogger("rdkit")
         rdkit_logger.setLevel(lvl)
 
-        for folder in ["optimize.tmp", "optimize.bak", "result", "targets"]:
+        for folder in ["optimize.tmp", "optimize.bak", "result"]:
             try:
                 shutil.rmtree(folder)
             except FileNotFoundError:
@@ -673,7 +674,10 @@ class ForceBalanceObjectiveTorsionDriveSetup(offsb.treedi.tree.TreeOperation):
             self._abinitio = True
         if "vibration" in fitting_targets:
             self._vibration = True
-        os.mkdir("targets")
+        try:
+            os.mkdir("targets")
+        except Exception:
+            pass
 
         labeler = None
 
@@ -752,8 +756,12 @@ class ForceBalanceObjectiveTorsionDriveSetup(offsb.treedi.tree.TreeOperation):
         # write the main output config file
         with open(self.fbinput_fname) as fin:
             header = fin.readlines()
-            with open(self.prefix + ".in", "w") as fout:
-                _ = [fout.write(line) for line in header]
+            write_header = True
+            if os.path.exists(self.prefix + ".in"):
+                write_header = False
+            with open(self.prefix + ".in", "w" if write_header else "a") as fout:
+                if write_header:
+                    _ = [fout.write(line) for line in header]
                 for tgt in self.db:
                     opts = self.db[tgt]["data"].get("global")
                     if opts is not None:
@@ -800,6 +808,11 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
         self._optgeo = False
         self._vibration = False
 
+        self._bond_denom = .05
+        self._angle_denom = 8
+        self._dihedral_denom = 0
+        self._improper_denom = 20
+
         self.source = DummyTree
         DummyTree.source = source_tree
         self.fb_main_opts = (
@@ -816,13 +829,13 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
         self.fb_tgt_opts = (
             "\n"
             + "\n$global"
-            + "\nbond_denom 0.05"
-            + "\nangle_denom 8"
-            + "\ndihedral_denom 0"
-            + "\nimproper_denom 20"
+            + "\nbond_denom {0:8.4f}"
+            + "\nangle_denom {1:8.4f}"
+            + "\ndihedral_denom {2:8.4f}"
+            + "\nimproper_denom {3:8.4f}"
             + "\n$end"
             + "\n\n$system"
-            + "\nname {:s}"
+            + "\nname {4:s}"
             + "\ngeometry mol.xyz"
             + "\ntopology mol.pdb"
             + "\nmol2 mol.sdf"
@@ -957,6 +970,15 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
 
         map_inv = None
 
+        try:
+            td = next(QCA.node_iter_depth_first(target, select="TorsionDrive"))
+            is_td = True
+        except StopIteration:
+            is_td = False
+
+        # # keeps track of energy of multiple opts
+        # ensemble_energy = 0.0
+
         for opt_node in QCA.node_iter_depth_first(target, select="Optimization"):
             job = 0
             for mol_node in QCA.node_iter_depth_first(opt_node, select="Molecule"):
@@ -1059,6 +1081,7 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
         kwargs["cwd"] = cwd
         kwargs["global"] = {}
         kwargs["local"] = {}
+        kwargs["is_td"] = is_td
         if self._optgeo:
             kwargs["global"]["geometry"] = self.fb_main_opts
             kwargs["local"]["geometry"] = self.fb_tgt_opts
@@ -1082,12 +1105,29 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
         cwd = kwargs["cwd"]
         fb_main_opts = kwargs["global"]
         fb_tgt_opts = kwargs["local"]
+        is_td = kwargs.get("is_td", False)
 
         # set T= 1 K
         kT = offsb.tools.const.kT2kjmol / 298.
         
-        total_ene = np.exp(-(offsb.tools.const.hartree2kjmol*(enes - enes.min()))/kT).sum()
-        enes = np.exp(-(offsb.tools.const.hartree2kjmol*(enes - enes.min()))/kT)/total_ene
+        if is_td:
+
+            # TODO: make this configurable
+            denom = 1.0
+            upper = 5.0
+            enes = offsb.tools.const.hartree2kcalmol*(enes - enes.min())
+            for i,e in enumerate(enes):
+                if e > upper:
+                    enes[i] = 0.0
+                elif e < denom:
+                    enes[i] = 1.0/denom
+                else:
+                    enes[i] = 1.0 / np.sqrt(denom**2 + (e - denom)**2)
+            # enes = np.exp(-(offsb.tools.const.hartree2kjmol*(enes - enes.min()))/kT)/total_ene
+            enes /= sum(enes)
+        else:
+            total_ene = np.exp(-(offsb.tools.const.hartree2kjmol*(enes - enes.min()))/kT).sum()
+            enes = np.exp(-(offsb.tools.const.hartree2kjmol*(enes - enes.min()))/kT)/total_ene
         # print((np.exp(-(offsb.tools.const.hartree2kjmol*(enes - enes.min()))/kT)/total_ene).sum())
 
         obConversion = openbabel.OBConversion()
@@ -1116,7 +1156,7 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
                     "sdf": mol2_str,
                     "xyz": xyz_str,
                     "global": fb_main_opts["geometry"].format("OG." + dir, og_weight),
-                    "local": fb_tgt_opts["geometry"].format(mol_id),
+                    "local": fb_tgt_opts["geometry"].format(self._bond_denom, self._angle_denom, self._dihedral_denom, self._improper_denom, mol_id),
                     "local_fnm": "optgeo_options.txt",
                 }
             if kwargs["energy"]:
@@ -1159,7 +1199,7 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
         rdkit_logger = logging.getLogger("rdkit")
         rdkit_logger.setLevel(lvl)
 
-        for folder in ["optimize.tmp", "optimize.bak", "result", "targets"]:
+        for folder in ["optimize.tmp", "optimize.bak", "result"]:
             try:
                 shutil.rmtree(folder)
             except FileNotFoundError:
@@ -1171,7 +1211,10 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
             self._abinitio = True
         if "vibration" in fitting_targets:
             self._vibration = True
-        os.mkdir("targets")
+        try:
+            os.mkdir("targets")
+        except Exception:
+            pass
 
         labeler = None
 
