@@ -23,7 +23,6 @@ def load_dataset_input(fnm):
     ]
     return datasets
 
-
 class QCArchiveSpellBook:
 
     # OpenFF datasets (but not named as such)
@@ -44,7 +43,9 @@ class QCArchiveSpellBook:
     drop_hessians = False
     drop_intermediates = False
 
-    def save(self, tree):
+    def save(self, tree=None):
+        if tree is None:
+            tree = self.QCA
         name = os.path.join(self.cache_dir, tree.name + ".p")
         print("Saving: ", tree.ID, "as", name, end=" ... ")
         tree.to_pickle(db=True, name=name)
@@ -67,7 +68,7 @@ class QCArchiveSpellBook:
         newdata = False
 
         if self.drop is None:
-            self.drop = []
+            self.drop = qca.QCAFilter()
         # print("Aux sets to load:")
         # print(sets)
 
@@ -96,13 +97,13 @@ class QCArchiveSpellBook:
                     if (s[0] == "TorsionDriveDataset" or self.drop_hessians)
                     else []
                 )
-                self.drop.extend(drop_hess)
+                self.drop.types.extend(drop_hess)
 
                 # QCA.build_index( ds, drop=["Hessian"])
                 # drop=[]
 
                 if self.drop_intermediates:
-                    self.drop.append("Intermediates")
+                    self.drop.types.append("Intermediates")
 
                 self.QCA.build_index(
                     ds, drop=self.drop, keep_specs=specs, start=start, limit=limit
