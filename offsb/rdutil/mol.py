@@ -5,7 +5,7 @@ from rdkit import Geometry as RDGeom
 from rdkit.Chem import AllChem, FragmentMatcher
 from rdkit.Chem.rdchem import Conformer
 
-from ..tools import const
+from offsb.tools import const
 
 
 def atom_map(mol):
@@ -64,6 +64,10 @@ def rdmol_from_smiles_and_qcmol(smiles_pattern, qcmol):
     return mol
 
 def save2d(rdmol, fname=None, indices=False, rdkwargs=None, rdoption_properties=None):
+
+    if issubclass(type(rdmol), str):
+        rdmol = build_from_smiles(rdmol)
+
     AllChem.Compute2DCoords(rdmol)
     # rdkit.Chem.Draw.PrepareMolForDrawing(rdmol)
     options = rdkit.Chem.Draw.MolDrawOptions()
