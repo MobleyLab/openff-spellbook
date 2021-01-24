@@ -78,7 +78,16 @@ generic_smirnoff_params = {
         id="t0",
         idivf=list([1.0] * 1),
     ),
-    "ImproperTorsions": None,
+    "ImproperTorsions": ImproperTorsionHandler.ImproperTorsionType(
+        smirks="[*:1]~[*:2](~[*:3])~[*:4]",
+        periodicity=[1],
+        k=[
+            "0.0 * kilocalorie/mole",
+        ],
+        phase=["0.0 * degree"],
+        id="i0",
+        idivf=list([1.0] * 1),
+    ),
 }
 
 
@@ -847,14 +856,22 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         no_bit = []
 
         denoms = {
-            "n": 0.0,
-            "b": 0.05 / offsb.tools.const.bohr2angstrom,
-            "a": 8.0,
-            "i": 20.0,
-            "t": 0.0,
+            "n": VDW_DENOM,
+            "b": self._po._setup._bond_denom / offsb.tools.const.bohr2angstrom,
+            "a": self._po._setup._angle_denom,
+            "i": self._po._setup._improper_denom,
+            "t": self._po._setup._dihedral_denom,
         }
 
-        verbose = True
+        denoms = {
+            "n": VDW_DENOM,
+            "b": .1 * offsb.tools.const.angstrom2bohr,
+            "a": 10, 
+            "i": 10,
+            "t": 10,
+        }
+
+        verbose = False
 
         if type(mode) is str:
             mode = [mode]
@@ -916,11 +933,6 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                                 val = 0.0
                             else:
                                 val = val / denoms[lbl[0]]
-                        if key == "measure":
-                            if denoms[lbl[0]] == 0.0:
-                                val = 0.0
-                            else:
-                                val = val * denoms[lbl[0]]
                         vals[mode_i] = val
 
                     groups[group_key] = vals
@@ -1039,21 +1051,13 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                         val = 0.0
                     else:
                         val = val / denoms[lbl[0]]
-                if key == "measure":
-                    if denoms[lbl[0]] == 0.0:
-                        val = 0.0
-                    else:
-                        val = val * denoms[lbl[0]]
                 vals[mode_i] = val
+
 
             # default is to score by the first mode supplied
             val = vals[mode[0]]
             success = np.abs(val) > eps
-            if key == "measure":
-                if denoms[lbl[0]] == 0.0:
-                    val = 0.0
-                else:
-                    val = val * denoms[lbl[0]]
+
             try:
                 success = bool(success)
             except ValueError:
@@ -1062,6 +1066,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 # all, both terms must be above eps. This is only important for
                 # sum_difference, which could provide multiple values.
                 success = any(success)
+            if verbose:
+                print("    Delta: {} eps: {} split? {}".format(val, eps, success) )
             if success:
                 if verbose:
                     print("Sorting groups...")
@@ -1179,14 +1185,17 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         param_data,
         key=None,
         ignore_bits=None,
-        mode="sum_difference",
+        mode=None,
         eps=1.0,
         bit_gradients=None,
     ):
 
         verbose = False
-        info = True
+        info = False
 
+
+        if mode is None:
+            mode = ["sum_difference"]
 
         if bit_gradients is None:
             bit_gradients = []
@@ -1309,18 +1318,23 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
             self._prim_clusters.clear()
 
+            total=len(manipulations)
+            pbar = tqdm.tqdm(ncols=80, total=total, desc="bit splitting")
             while len(manipulations) > 0:
                 bit = manipulations.pop()
                 todo -= 1
-                if info:
+                if verbose:
                     print(
                         "{:8d}/{:8d}".format(todo, completed),
                         "Scanning for bit ({:3d})".format(bit.bits()),
                         bit,
                     )
+
                 # if lbl == 't3' and todo == 15 and completed == 2:
                 #     breakpoint()
                 completed += 1
+                pbar.update(completed)
+
                 # Already visited; skip
                 if any([x == bit for x in bit_visited]):
                     continue
@@ -1380,6 +1394,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                         n_manips = len(manipulations)
                         manipulations = manipulations.union(new_manips)
                         todo += len(manipulations) - n_manips
+                        total += len(manipulations) - n_manips
+                        pbar.total = total
                     elif verbose:
                         print()
                     continue
@@ -1401,6 +1417,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                     bit_gradients=bit_gradients,
                     ignore_bits=ignore_bits,
                 )
+            pbar.close()
 
         if len(bit_gradients) == 0:
             return None, None
@@ -1796,6 +1813,9 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
             for aidx in labels:
                 lbl = labels[aidx]
+                if lbl is None:
+                    breakpoint()
+                    continue
                 print(
                     "    ",
                     entry.payload,
@@ -2011,10 +2031,11 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                                     }
 
                                 mol_fc = self._fc.get(mol.payload)
+                                param_data[param_name][key]["measure"].extend(vals)
+
                                 if mol_fc is not None:
                                     force_vals = mol_fc[aidx]
 
-                                    param_data[param_name][key]["measure"].extend(vals)
                                     param_data[param_name][key]["force"].append(force_vals)
 
                     # for hessian_node in QCA.node_iter_depth_first(entry, select="Hessian"):
@@ -2447,6 +2468,9 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         if ignore_parameters is None:
             ignore_parameters = []
 
+        # BREAK
+        # breakpoint() 
+
         if use_gradients:
             print("Running reference gradient calculation...")
 
@@ -2524,8 +2548,6 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
         current_ff = "type_split.offxml"
         self.to_smirnoff_xml(current_ff, verbose=False)
-
-        self.to_smirnoff_xml(newff_name, verbose=False)
 
         while True:
             if use_gradients:
@@ -2611,13 +2633,13 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
             if split_strategy == "spatial_reference":
                 key = "measure"
-                mode = "mean_difference"
-                eps = 3.0
+                mode = ["mean_difference"]
+                eps = 1.0 
                 param_data = self._combine_reference_data()
             elif split_strategy == "force_reference":
                 key = "force"
-                mode = "mean_difference"
-                eps = 3.0
+                mode = ["mean_difference"]
+                eps = 10.0
                 param_data = self._combine_reference_data()
             elif use_gradients:
                 # this number is highly dependent on other parameters
@@ -2803,15 +2825,17 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
             else:
                 best = [
-                    node,
+                    node.copy(),
                     np.inf,
                     node.parent,
-                    self.db[node.payload],
+                    self.db[node.payload].copy(),
                     score,
                     0,
                     np.inf,
                     np.inf,
-                    self.db
+                    copy.deepcopy(self.db),
+                    np.inf,
+                    np.inf
                 ]
                 candidates = [best]
                 # hack so that we add it using the common path below
@@ -3036,7 +3060,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         for param_name, param_types in param_data.items():
             if param_name[0] in ignore_parameters:
                 continue
-            if only_parameters is not None and param_name in only_parameters:
+            if only_parameters is None or param_name in only_parameters:
                 param_types = list(param_types.values())
                 for p_type, fn in {
                     "measure": self._set_parameter_spatial,
