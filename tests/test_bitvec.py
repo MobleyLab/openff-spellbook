@@ -20,7 +20,6 @@ def test_getitem():
 
     v = offsb.chem.types.BitVec(maxbits=10)
     v[:5] = True
-    breakpoint()
     ans = v[2:8:2]
     assert len(ans) == 3
     assert sum(ans) == 2

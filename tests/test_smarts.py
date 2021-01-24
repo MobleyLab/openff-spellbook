@@ -22,11 +22,10 @@ def test_negated_atom_smarts():
     matches = top.chemical_environment_matches(smarts)
     assert len(matches) == 2
 
-    assert smarts == '[!#1;!H1!H0;!X1;!r5!r4!r3;A:1]'
+    assert smarts == '[!#1;!H1!H0;!X1;x0;!r5!r4!r3;A:1]'
 
 def test_negated_bond():
 
-    breakpoint()
     a = offsb.chem.types.BondType.from_string("~")
 
     a._order[0:4] = False

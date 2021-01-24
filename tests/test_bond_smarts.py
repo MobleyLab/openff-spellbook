@@ -21,7 +21,8 @@ def test_bond():
     # but if we want to take out this bit, we need to 
     assert b  in a
 
-    assert (a - b) == a
+    assert (a - b) in a
+    assert a not in (a - b)
 
     b._atom2._H[2] = True
 
@@ -29,6 +30,15 @@ def test_bond():
 
     assert (a - b) != a
 
+def test_bond_ring():
+    a = offsb.chem.types.BondType()
+    a._aA[0] = 1
+    a._order[1] = 1
+    valid = a.to_smarts() == "-;!@"
+    assert valid
+    a._aA[1] = 1
+    valid = a.to_smarts() == "-"
+    assert valid
 
 def test_atom():
     s = "[#6!H1X3:2]"

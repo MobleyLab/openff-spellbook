@@ -133,12 +133,12 @@ def test_angle_bit_flip():
     # to the bit appled to the RHS (instead of the LHS)
     # turned off some reordering stuff; so this is a good test for
     # ensuring proper function of bit application
-    s = "[*:1]-[#8:2]-[!H0!x0:3]"
+    s = "[*:1]-[#8:2]-[!H0;!x0:3]"
     a = offsb.chem.types.AngleGraph.from_string(s)
     b = offsb.chem.types.AngleGraph()
     b._atom1._r[4] = 1
     smarts = (a - b).to_smarts()
-    ans = smarts == "[!r6:1]-[#8:2]-[!H0!x0:3]"
+    ans = smarts == "[!r6:1]-[#8:2]-[!H0;!x0:3]"
     assert ans
 
     s = "[!x0:1]-[#8:2]-[*:3]"
