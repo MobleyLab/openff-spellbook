@@ -227,6 +227,10 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
 
         best = optimizer.BestChk
 
+        if best is None:
+            print("best was None! breaking")
+            breakpoint()
+
         self.X = 0
         for tgt, dat in self._objective.ObjDict.items():
             rec = tgt.split(".")[-1]
@@ -309,8 +313,10 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         self.new_ff = None
         new_ff_path = os.path.join("result", self._setup.prefix, new_ff)
         if os.path.exists(new_ff_path):
+            # print("Loading new FF from optimizer:", new_ff_path)
             self.new_ff = ForceField(new_ff_path, allow_cosmetic_attributes=True)
         else:
+            # print("Loading new FF from optimizer:", self.ff_fname)
             self.new_ff = ForceField(self.ff_fname, allow_cosmetic_attributes=True)
 
         if self.cleanup:
@@ -411,6 +417,10 @@ class ForceBalanceObjectiveTorsionDriveSetup(offsb.treedi.tree.TreeOperation):
         self.fbinput_fname = fbinput_fname
         self.ff_fname = ff_fname
 
+        self.td_denom = 1.0
+        self.td_upper = 5.0
+        self.restrain_k = 0.0
+
         self.parameterize_handlers = None
 
         self.processes = 1
@@ -430,16 +440,16 @@ class ForceBalanceObjectiveTorsionDriveSetup(offsb.treedi.tree.TreeOperation):
         self.fb_main_opts = (
             "\n"
             + "\n$target"
-            + "\nname {:s}"
+            + "\nname {dir:s}"
             + "\ntype TorsionProfile_SMIRNOFF"
             + "\npdb mol.pdb"
             + "\nmol2 mol.sdf"
             + "\ncoords scan.xyz"
             + "\nwritelevel 0"
             + "\nattenuate"
-            + "\nenergy_denom 1.0"
-            + "\nenergy_upper 5.0"
-            + "\nrestrain_k 0.0"
+            + "\nenergy_denom {denom:f}"
+            + "\nenergy_upper {upper:f}"
+            + "\nrestrain_k {restrain_k:f}"
             + "\nremote 1"
             + "\n$end"
         )
@@ -634,7 +644,12 @@ class ForceBalanceObjectiveTorsionDriveSetup(offsb.treedi.tree.TreeOperation):
                     "dir": dir,
                     "pdb": pdb_str,
                     "sdf": sdf_str,
-                    "global": fb_main_opts.format(dir),
+                    "global": fb_main_opts.format(
+                        dir=dir,
+                        denom=self.td_denom,
+                        upper=self.td_upper,
+                        restrain_k=self.restrain_k,
+                    ),
                 }
             }
         }
@@ -805,6 +820,9 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
         self._abinitio = False
         self._optgeo = False
         self._vibration = False
+
+        self.td_denom = 1.0
+        self.td_upper = 5.0
 
         self._bond_denom = 0.05
         self._angle_denom = 8
@@ -1045,10 +1063,12 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
                         gradient = [gradient[i] for i in map_inv]
                         gradient = offsb.tools.util.flatten_list(gradient)
                         for g in gradient:
+
                             # the documentation says it should be in au, but these differ by a factor of 1000 compared to MM? So I assume they are in kcal or kj.. kcal matches closer but fb says everything is kJ.. both work out
-                            fid.write(
-                                " {:16.12f}".format(g * offsb.tools.const.hartree2kjmol)
-                            )
+                            gval = g * offsb.tools.const.hartree2kjmol
+
+                            # gval = g
+                            fid.write(" {:16.12f}".format(gval))
                         fid.write("\n")
                     fid.close()
                 if self._vibration:
@@ -1136,7 +1156,9 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
             # TODO: make this configurable
             denom = 1.0
             upper = 5.0
-            enes = offsb.tools.const.hartree2kcalmol * (enes - enes.min())
+
+            # input assumes kJ/mol, then converts to kcal/mol in FB
+            enes = offsb.tools.const.hartree2kjmol * (enes - enes.min())
             for i, e in enumerate(enes):
                 if e > upper:
                     enes[i] = 0.0
@@ -1263,6 +1285,7 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
                 "ImproperTorsions",
             ]
 
+        print("Loading FF for labeling", self.ff_fname)
         ff_kwargs = dict(allow_cosmetic_attributes=True)
         if len(parameterize_handlers) > 1:
             labeler = offsb.op.openforcefield.OpenForceFieldTree(
@@ -1319,6 +1342,7 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
             # we are operating on only one handler, so it doesn't take a list of handlers
             kwargs.pop("parameterize_handlers")
 
+        # print("Exporting FF to", args)
         labeler.export_ff(*args, **kwargs)
         self.labeler = labeler
         #
@@ -1338,6 +1362,95 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
                             if opts not in targets:
                                 fout.write(opts)
                                 targets.append(opts)
+
+class ForceBalanceObjectiveEvaluatorSetup(offsb.treedi.tree.TreeOperation):
+
+    def __init__(
+        self,
+        fbinput_fname,
+        source_tree,
+        name,
+        ff_fname,
+        prefix="optimize",
+        verbose=True,
+    ):
+        super().__init__(source_tree, name)
+        import logging
+
+        if verbose:
+            self.logger.setLevel(logging.INFO)
+        else:
+            self.logger.setLevel(logging.ERROR)
+
+        self._select = "Entry"
+        self.prefix = prefix
+
+        self.global_opts, _ = parse_inputs(fbinput_fname)
+
+        self.fbinput_fname = fbinput_fname
+        self.ff_fname = ff_fname
+
+        self.parameterize_handlers = None
+
+        self.processes = 1
+
+        self._abinitio = False
+        self._optgeo = False
+        self._vibration = False
+
+        self.td_denom = 1.0
+        self.td_upper = 5.0
+
+        self._bond_denom = 0.05
+        self._angle_denom = 8
+        self._dihedral_denom = 0
+        self._improper_denom = 20
+
+        self._fb_tgt_opts = {
+            "connection_options": {
+                "server_address": "localhost",
+                "server_port": 8000
+            },
+            "data_set_path": "training-set.json",
+            "denominators": {
+                "Density": {
+                    "@type": "openff.evaluator.unit.Quantity",
+                    "unit": "g / ml",
+                    "value": 0.05
+                },
+                "EnthalpyOfMixing": {
+                    "@type": "openff.evaluator.unit.Quantity",
+                    "unit": "kJ / mol",
+                    "value": 1.6
+                }
+            },
+            "estimation_options": {
+                "batch_mode": {
+                    "@type": "openff.evaluator.client.client.BatchMode",
+                    "value": "SharedComponents"
+                },
+                "calculation_layers": [
+                    "SimulationLayer"
+                ]
+            },
+            "polling_interval": 600,
+            "weights": {
+                "Density": 1.0,
+                "EnthalpyOfMixing": 1.0
+            }
+        }
+
+        self.source = DummyTree
+        DummyTree.source = source_tree
+        self.fb_main_opts = (
+            "\n"
+            + "\n$target"
+            + "\nname {:s}"
+            + "\ntype Evaluator_SMIRNOFF"
+            + "\nweight {:16.13f}"
+            + "\nopenff.evaluator_input options.json"
+            + "\n$end"
+        )
 
 
 # Secret notes
