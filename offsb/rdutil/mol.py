@@ -6,6 +6,7 @@ from rdkit.Chem import AllChem, FragmentMatcher
 from rdkit.Chem.rdchem import Conformer
 
 from offsb.tools import const
+from offsb.tools import util
 
 
 def atom_map(mol):
@@ -33,12 +34,9 @@ def build_from_smiles(smiles_pattern):
     Chem.SanitizeMol(mol, Chem.SanitizeFlags.SANITIZE_SETAROMATICITY)
     return mol
 
-
-def embed_qcmol_3d(mol, qcmol):
-
+def _embed(mol, xyz):
     map_idx = atom_map(mol)
     assert map_idx is not None
-    xyz = qcmol.geometry * const.bohr2angstrom
     coordMap = {i: RDGeom.Point3D(*xyz[map_idx[i] - 1]) for i in map_idx}
 
     n = mol.GetNumAtoms()
@@ -50,6 +48,24 @@ def embed_qcmol_3d(mol, qcmol):
     # not sure if this can fail, so just accept anything
     return ret
 
+def embed_qcmol_3d(mol, qcmol):
+
+    xyz = qcmol.geometry * const.bohr2angstrom
+    return _embed(mol, xyz)
+
+def embed_xyz(mol, xyz_in_ang):
+
+    xyz = xyz_in_ang
+    return _embed(mol, xyz)
+
+def embed_xyz_file(mol, xyz_file):
+
+    ids = []
+    xyz = util.load_xyz(xyz_file)
+    for frame in xyz:
+        i = _embed(mol, frame)
+        ids.append(i)
+    return ids
 
 def rdmol_from_smiles_and_qcmol(smiles_pattern, qcmol):
 
