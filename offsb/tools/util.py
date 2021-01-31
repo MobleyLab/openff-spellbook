@@ -1,6 +1,8 @@
 #!/usr/bin/env python3 
 
 import itertools
+import logging
+import numpy as np
 
 def flatten_list(l, times=1):
     if times == 0: return l
@@ -43,19 +45,21 @@ def get_conformation_number(mol):
             ret = "1"
     return ret
 
-def combine(db):
-    mols = list(db['mol_data'].keys())
-    mols_combined = {}
-    logger.debug("Mol list: ") ; [logger.debug(m) for m in mols]
-    for i in range(len(mols)):
-        query = strip_conformation_number(mols[i])
-        logger.debug("Query is: " + query)
-        if(query not in mols_combined):
-            hits = []
-            for j in range(len(mols)):
-                mol = strip_conformation_number(mols[j])
-                if(mol == query):
-                    hits.append(mol)
-            logger.debug("Matches are " + str(hits))
-            mols_combined[query] = hits
-    return mols_combined
+def load_xyz(xyz_file):
+    
+    fid = open(xyz_file)
+    xyz = []
+    atoms = int(fid.readline())
+
+    while True:
+
+        fid.readline()
+        xyz_frame = [list(map(float, fid.readline().split()[1:])) for i in range(atoms)]
+        xyz.append(xyz_frame)
+        n = fid.readline()
+        if n == "":
+            break
+
+    fid.close()
+
+    return np.array(xyz)
