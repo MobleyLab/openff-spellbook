@@ -2571,6 +2571,12 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 k: v for k, v in param_data.items() if k[0] not in ignore_parameters
             }
 
+        candidate_mode_choices = ["split_gradient_max"]
+        candidate_mode_choices.extend(mode)
+
+        candidate_mode = candidate_mode_choices[0]
+
+
         while len(candidates) < candidate_limit:
             if use_gradients:
                 print("\n\nMicroiter", i)
@@ -2676,10 +2682,6 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                     # this is nicer than brute force, but still need to eval
                     # every split
 
-                    candidate_mode_choices = ["split_gradient_max"]
-                    candidate_mode_choices.extend(mode)
-                    
-                    candidate_mode = candidate_mode_choices[0]
 
                     if optimize_during_scoring:
                         # if we are going through the trouble to optimize every
