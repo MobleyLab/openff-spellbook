@@ -22,7 +22,10 @@ def test_negated_atom_smarts():
     matches = top.chemical_environment_matches(smarts)
     assert len(matches) == 2
 
-    assert smarts == '[!#1;!H1!H0;!X1;x0;!r5!r4!r3;A:1]'
+    for i in ["!#1", "!H1", "!H0", "!X1", "x0", "!r5", "!r4", "!r3", "A", ":1"]:
+        # assert smarts == '[!#1;!H1!H0;!X1;x0;!r5!r4!r3;A:1]'
+        # guard against future cases that might reorder and give false negatives
+        assert i in smarts
 
 def test_negated_bond():
 
