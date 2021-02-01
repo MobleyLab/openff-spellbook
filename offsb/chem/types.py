@@ -8,7 +8,6 @@ import sys
 from typing import List
 
 import numpy as np
-
 import tqdm
 
 
@@ -79,7 +78,9 @@ class BitVec:
                 end = self.maxbits
 
             if np.isinf(end):
-                raise IndexError("Cannot supply an infinite length array (input slice had no bounds and maxbits was inf)")
+                raise IndexError(
+                    "Cannot supply an infinite length array (input slice had no bounds and maxbits was inf)"
+                )
 
             step = 1 if i.step is None else i.step
 
@@ -89,7 +90,12 @@ class BitVec:
 
             if end > self._v.shape[0]:
                 diff = (end - self._v.shape[0]) // step
-                return np.concatenate((self._v[start:end:step] ^ self.inv, np.full((diff,), self.inv, dtype=np.bool)))
+                return np.concatenate(
+                    (
+                        self._v[start:end:step] ^ self.inv,
+                        np.full((diff,), self.inv, dtype=np.bool),
+                    )
+                )
 
             return self._v[start:end:step] ^ self.inv
 
@@ -458,15 +464,18 @@ class ChemType(abc.ABC):
 
         return False
 
-    def bits(self, maxbits=False):
+    def bits(self, maxbits=False, return_all=False):
         """"""
 
-        bits = 0
+        bits = []
         for name in self._fields:
             vec: BitVec = getattr(self, name)
-            bits += vec.bits(maxbits=maxbits)
+            bits.append(vec.bits(maxbits=maxbits))
 
-        return bits
+        if return_all:
+            return tuple(bits)
+        else:
+            return sum(bits)
 
     def copy(self):
         """
@@ -525,6 +534,48 @@ class ChemType(abc.ABC):
             sumb += y
 
         return suma, sumb
+
+    def _permutations(self):
+        """
+        Generates all of the valid orderings
+        of the type. Useful for comparisons,
+        where we need to check if e.g A-B is
+        the same as B-A or A-B.
+
+        This default function is for all except impropers, which is either
+        forward or reversed
+        """
+        order = tuple(range(len(self._fields)))
+        return (
+            order,
+            order[::-1],
+        )
+
+    def align_to(self, ref):
+        """
+        Align the representation such that an atom by atom comparison results
+        with the largest overlap.
+        """
+
+        self._check_sane_compare(ref)
+
+        permutations = self._permutations()
+        best = (None, None)
+        scores = []
+
+        for order in permutations:
+            swapped = self.copy()
+            swapped._fields = [swapped._fields[i] for i in order]
+            ans = swapped - ref
+            bits = ans.bits(maxbits=True, return_all=True)
+            if best[1] is None or bits < best[1]:
+                best = (order, bits)
+            scores.append((order, bits, ans))
+
+        if best[1] is not None:
+            reordered = [getattr(self, self._fields[i]) for i in best[0]]
+            for i, val in enumerate(reordered):
+                setattr(self, self._fields[i], val)
 
     def drop(self, other):
         self._check_sane_compare(other)
@@ -631,13 +682,15 @@ class ChemType(abc.ABC):
         # if its not found the first time. Note that this will probably lead
         # to some complicated situations when manipulations become more complex
 
+        # now that we have an align function, try to do the normal thing
+
         pairs = zip(self._fields, o._fields)
 
         # this means o is not aligned with self, so we try to get a better
         # alignment by flipping it
-        if self & o != o and self._symmetric and o._symmetric:
-            # TODO get this working for impropers
-            pairs = zip(self._fields, o._fields[::-1])
+        # if self & o != o and self._symmetric and o._symmetric:
+        #     # TODO get this working for impropers
+        #     pairs = zip(self._fields, o._fields[::-1])
 
         ret = []
         for field_a, field_b in pairs:
@@ -902,7 +955,7 @@ class AtomType(ChemType):
             ret = pat.search(atom)
             r = BitVec()
 
-            r.maxbits = 7  # consider rings of 0-8 (skip 1 and 2)
+            r.maxbits = 50  # consider rings of 0-8 (skip 1 and 2)
             if ret:
                 if ret.group(2) != "":
                     # order is 0:0 1:None 2:None 3:1 4:2 2:r3 r4
@@ -932,24 +985,23 @@ class AtomType(ChemType):
                 aA[:] = True
 
             # sanitize: assume hydrogen is a single bonded atom
-            if symbol[1] and not any(symbol[2:]):
-                H[0] = True
-                H[1:] = False
+            # if symbol[1] and not any(symbol[2:]):
+            #     H[0] = True
+            #     H[1:] = False
 
-                X[0] = False
-                X[2:] = False
+            #     X[0] = False
+            #     X[2:] = False
 
-                x[2:] = False
+            #     x[2:] = False
 
-                r[1:] = False
+            #     r[1:] = False
 
-                aA[:] = False
-                aA[0] = True
+            #     aA[:] = False
+            #     aA[0] = True
 
             self += self.from_data(symbol, H, X, x, r, aA)
 
         ATOM_UNIVERSE += self
-
 
         return self
 
@@ -1960,7 +2012,9 @@ class BondGraph(ChemGraph):
 
 
 class AngleGroup(ChemGraph):
-    def __init__(self, atom1=None, bond1=None, atom2=None, bond2=None, atom3=None, sorted=False):
+    def __init__(
+        self, atom1=None, bond1=None, atom2=None, bond2=None, atom3=None, sorted=False
+    ):
         if atom1 is None:
             atom1 = AtomType()
         if bond1 is None:
@@ -2529,7 +2583,7 @@ class OutOfPlaneGraph(DihedralGraph):
         atom3=None,
         bond3=None,
         atom4=None,
-        sorted=False
+        sorted=False,
     ):
         if sorted:
             if atom1 <= atom3 and atom3 <= atom4:
@@ -2647,74 +2701,92 @@ class OutOfPlaneGraph(DihedralGraph):
 
         return True
 
+    def _permutations(self):
+        """"""
+
+        return (
+            (0, 1, 2, 3, 4, 5, 6),
+            (0, 1, 2, 5, 6, 3, 4),
+            (3, 4, 2, 0, 1, 5, 6),
+            (3, 4, 2, 5, 6, 0, 1),
+            (5, 6, 2, 0, 1, 3, 4),
+            (5, 6, 2, 3, 4, 0, 1),
+        )
+
     def __contains__(self, o):
 
-        if not super().__contains__(o):
+        for order in self._permutations():
             rev = o.copy()
-            rev._fields = [
-                "_atom1",
-                "_bond1",
-                "_atom2",
-                "_bond2",
-                "_atom4",
-                "_bond3",
-                "_atom3",
-            ]
-        else:
-            return True
-        if not super().__contains__(rev):
-            rev = o.copy()
-            rev._fields = [
-                "_atom3",
-                "_bond2",
-                "_atom2",
-                "_bond1",
-                "_atom1",
-                "_bond3",
-                "_atom4",
-            ]
-        else:
-            return True
-        if not super().__contains__(rev):
-            rev = o.copy()
-            rev._fields = [
-                "_atom3",
-                "_bond2",
-                "_atom2",
-                "_bond3",
-                "_atom4",
-                "_bond1",
-                "_atom1",
-            ]
-        else:
-            return True
-        if not super().__contains__(rev):
-            rev = o.copy()
-            rev._fields = [
-                "_atom4",
-                "_bond3",
-                "_atom2",
-                "_bond3",
-                "_atom3",
-                "_bond1",
-                "_atom1",
-            ]
-        else:
-            return True
-        if not super().__contains__(rev):
-            rev = o.copy()
-            rev._fields = [
-                "_atom4",
-                "_bond3",
-                "_atom2",
-                "_bond1",
-                "_atom1",
-                "_bond3",
-                "_atom3",
-            ]
-        else:
-            return True
-        return super().__contains__(rev)
+            rev._fields = [rev._fields[i] for i in order]
+            if super().__contains__(o):
+                return True
+        return False
+        # if not super().__contains__(o):
+        #     rev = o.copy()
+        #     rev._fields = [
+        #         "_atom1",
+        #         "_bond1",
+        #         "_atom2",
+        #         "_bond2",
+        #         "_atom4",
+        #         "_bond3",
+        #         "_atom3",
+        #     ]
+        # else:
+        #     return True
+        # if not super().__contains__(rev):
+        #     rev = o.copy()
+        #     rev._fields = [
+        #         "_atom3",
+        #         "_bond2",
+        #         "_atom2",
+        #         "_bond1",
+        #         "_atom1",
+        #         "_bond3",
+        #         "_atom4",
+        #     ]
+        # else:
+        #     return True
+        # if not super().__contains__(rev):
+        #     rev = o.copy()
+        #     rev._fields = [
+        #         "_atom3",
+        #         "_bond2",
+        #         "_atom2",
+        #         "_bond3",
+        #         "_atom4",
+        #         "_bond1",
+        #         "_atom1",
+        #     ]
+        # else:
+        #     return True
+        # if not super().__contains__(rev):
+        #     rev = o.copy()
+        #     rev._fields = [
+        #         "_atom4",
+        #         "_bond3",
+        #         "_atom2",
+        #         "_bond3",
+        #         "_atom3",
+        #         "_bond1",
+        #         "_atom1",
+        #     ]
+        # else:
+        #     return True
+        # if not super().__contains__(rev):
+        #     rev = o.copy()
+        #     rev._fields = [
+        #         "_atom4",
+        #         "_bond3",
+        #         "_atom2",
+        #         "_bond1",
+        #         "_atom1",
+        #         "_bond3",
+        #         "_atom3",
+        #     ]
+        # else:
+        #     return True
+        # return super().__contains__(rev)
 
     def to_smarts(self, tag=True):
 

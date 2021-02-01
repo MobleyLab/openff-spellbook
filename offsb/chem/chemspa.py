@@ -1171,16 +1171,48 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             # Most likely for outofplanes
             if lbl not in param_data:
                 continue
-            group = functools.reduce(lambda x, y: x + y, param_data[lbl])
-
-            # this I already know isn't the best since the primitives are
-            # in any order, and symmetry messes this up
-            fundamental[lbl] = (self.db[lbl]["data"]["parameter"].smirks, self.db[lbl]["data"]["group"].to_smarts(), group.to_smarts(), (self.db[lbl]["data"]["group"] & group).to_smarts())
 
             print("\nConsidering for bit scans", node)
             if lbl in bit_cache:
                 print("This node cached")
                 continue
+
+            ff_param = self.db[lbl]["data"]["group"]
+            # print("FF param:", ff_param)
+
+            # try to reorder the prim to the ff prim. note this modifies in-place
+            # print("Aligning to FF")
+            for prim in param_data[lbl]:
+                # print("before:", prim)
+                prim.align_to(ff_param)
+                # print("after :", prim)
+            
+            # Now that all prims are ordered to match the FF prim, try to
+            # add them together as tighly as possible. For example, if the param
+            # is *-C-*, and we have H-C-C and C-C-H, we just order to the first
+            # one visited such that the group will always be H-C-C in this case.
+            # This allows preventing cases where it says C-C-C and H-C-H is in
+            # the group, when no match prims were either.
+            prims = list(param_data[lbl])
+            group = prims[0]
+
+            # print("Aligning to group")
+            for prim in param_data[lbl]:
+                # print("before:", prim)
+                prim.align_to(group)
+                # print("after :", prim)
+                group += prim
+
+
+            # group = functools.reduce(lambda x, y: x + y, param_data[lbl])
+
+            # this I already know isn't the best since the primitives are
+            # in any order, and symmetry messes this up
+            fundamental[lbl] = (self.db[lbl]["data"]["parameter"].smirks, self.db[lbl]["data"]["group"].to_smarts(), group.to_smarts(), (self.db[lbl]["data"]["group"] & group).to_smarts())
+            # print("\n\nFundamental SMARTS (idx, lbl, FF, FF group, DATA group, FF & DATA):")
+            # print("{:3d} {:5s} {}".format(0, lbl, fundamental[lbl]))
+
+
 
             # only iterate on bits that matched from the smirks from the data
             # we are considering
@@ -1251,7 +1283,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             hits = 0
 
             self._prim_clusters.clear()
-
+            maxbits = 1
             total=len(manipulations)
             pbar = tqdm.tqdm(ncols=80, total=total, desc="bit splitting")
             while len(manipulations) > 0:
@@ -1341,6 +1373,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 #             print(ignore)
                 #         continue
                 hits += 1
+                maxbits = max(maxbits, bit.bits())
 
                 self._scan_param_with_bit(
                     param_data,
@@ -1356,7 +1389,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
             bit_cache[lbl] = True
 
-            print("Evaluated {:d} bit splits, producing {:d} hits".format(completed, hits))
+            print("Evaluated {:d} bit splits, producing {:d} hits of max bit depth of {:d}".format(completed, hits, maxbits))
             pbar.close()
 
         if len(bit_gradients) == 0:
