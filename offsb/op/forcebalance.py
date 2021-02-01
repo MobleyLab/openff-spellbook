@@ -73,7 +73,7 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         self._options = None
         self._tgt_opts = None
 
-        self.options_override = None
+        self.options_override = {}
 
         self.fitting_targets = ["geometry", "energy", "vibration"]
         DummyTree.source = source_tree
@@ -158,11 +158,18 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         # The general options and target options that come from parsing the input file
         if os.path.exists("optimize.in"):
             self._options, self._tgt_opts = parse_inputs("optimize.in")
+            print("Current options overridden")
+            for k,v in self.options_override.items():
+                print(k,v)
+            self._options.update(self.options_override)
             if options_override is not None:
+                print("Overriding new options:")
+                for k,v in options_override.items():
+                    print(k,v)
                 self._options.update(options_override)
-            self.options_override = None
-        else:
-            self.options_override = options_override
+            # self.options_override = None
+        elif options_override is not None:
+            self.options_override.update(options_override)
 
     def apply(
         self,
@@ -197,12 +204,13 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         if self._options is None or self._tgt_opts is None:
             self.load_options()
 
-        if self.options_override is not None:
-            self._options.update(self.options_override)
-            self.options_override = None
+        # if self.options_override is not None:
+        #     self._options.update(self.options_override)
+        #     self.options_override = None
 
         self._options["jobtype"] = jobtype
 
+        
         self._forcefield = forcebalance.forcefield.FF(self._options)
 
         # Because ForceBalance Targets contain unpicklable objects, we must

@@ -141,8 +141,9 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             self.split_mode = self.score_mode[3]
             self.score_mode = self.score_mode[3]
 
-            self.trust0 = 0.25
+            self.trust0 = None
             self.eig_lowerbound = None
+            self.finite_difference_h = None
 
     def to_pickle(self, db=True, index=True, name=None):
         po, self._po = self._po, None
@@ -1172,10 +1173,10 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             if lbl not in param_data:
                 continue
 
-            print("\nConsidering for bit scans", node)
             if lbl in bit_cache:
-                print("This node cached")
                 continue
+
+            print("\nConsidering for bit scans", node)
 
             ff_param = self.db[lbl]["data"]["group"]
             # print("FF param:", ff_param)
@@ -1347,21 +1348,20 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 # if bit in (param_group - bit) or occluding_split:
                 if occluding_split:
                     bit_visited[bit] = None
-                    if verbose:
-                        print("This bit occludes the parent parameter", end=" ")
+                    # Print this out to give an idea 
+                    print("This bit occludes the parent parameter", end=" ")
                     if self.bit_search_limit is None or bit.bits() < self.bit_search_limit:
-                        if verbose:
-                            print(
-                                "adding another bit (",
-                                bit.bits() + 1,
-                                ")",
-                            )
                         new_manips = list([bit + x for x in group])
                         n_manips = len(manipulations)
                         manipulations = manipulations.union(new_manips)
                         todo += len(manipulations) - n_manips
                         total += len(manipulations) - n_manips
                         pbar.total = total
+                        print(
+                            "adding another bit (",
+                            bit.bits() + 1,
+                            "), producing {:d} more splits to check (total= {:d})".format(len(manipulations), total),
+                        )
                     elif verbose:
                         print()
                     continue
@@ -1395,16 +1395,18 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         if len(bit_gradients) == 0:
             return None, None
 
-        print("\n\nBits per parameter:")
-        for i, (b, v) in enumerate(n_bits.items(), 1):
-            print("| {:5} {:4d}".format(b, v), end="")
-            if i % 7 == 0:
-                print(" |\n", end="")
-        print("\nTotal parameters:", len(n_bits))
+        if len(n_bits):
+            print("\n\nBits per parameter:")
+            for i, (b, v) in enumerate(n_bits.items(), 1):
+                print("| {:5} {:4d}".format(b, v), end="")
+                if i % 7 == 0:
+                    print(" |\n", end="")
+            print("\nTotal parameters:", len(n_bits))
 
-        print("\n\nFundamental SMARTS (idx, lbl, FF, FF group, DATA group, FF & DATA):")
-        for i, (lbl, v) in enumerate(fundamental.items(), 1):
-            print("{:3d} {:5s} {}".format(i, lbl, v))
+        if len(fundamental):
+            print("\n\nFundamental SMARTS (idx, lbl, FF, FF group, DATA group, FF & DATA):")
+            for i, (lbl, v) in enumerate(fundamental.items(), 1):
+                print("{:3d} {:5s} {}".format(i, lbl, v))
 
         # bit_gradients = [bit_gradient for ignore in ignore_bits for bit_gradient in bit_gradients if not (bit_gradient[0] == ignore[0] and bit_gradient[1] == ignore[1])]
         bg = []
@@ -1425,17 +1427,18 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             reverse=True,
         )
 
-        print(
-            "\n\n### Here are the candidates to split, ordered by priority (mode: {}) ###".format(
-                mode[0]
+        if len(bit_gradients):
+            print(
+                "\n\n### Here are the candidates to split, ordered by priority (mode: {}) ###".format(
+                    mode[0]
+                )
             )
-        )
-        for bit_gradient in bit_gradients:
-            print("bits={}".format(bit_gradient[1].bits()), bit_gradient)
+            for bit_gradient in bit_gradients:
+                print("bits={}".format(bit_gradient[1].bits()), bit_gradient)
 
-        if self.score_candidate_limit is not None:
-            print("Limiting candidates to the top {}".format(self.score_candidate_limit))
-            bit_gradients = bit_gradients[:self.score_candidate_limit]
+            if self.score_candidate_limit is not None:
+                print("Limiting candidates to the top {}".format(self.score_candidate_limit))
+                bit_gradients = bit_gradients[:self.score_candidate_limit]
 
         QCA = self._po.source.source
         # self.to_smirnoff_xml("tmp.offxml", verbose=False)
@@ -2430,6 +2433,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 }
             )
             print("Setting trust0 to", self.trust0)
+        else:
+            self.trust0 = self._po._options["trust0"]
         if self.finite_difference_h is not None:
             self._po.load_options(
                 options_override={
@@ -2437,16 +2442,18 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 }
             )
             print("Setting finite_difference_h to", self.finite_difference_h)
-        if self.eig_lowerbound:
+        else:
+            self.finite_difference_h = self._po._options["finite_difference_h"]
+
+        if self.eig_lowerbound is not None:
             self._po.load_options(
                 options_override={
                     "eig_lowerbound": self.eig_lowerbound,
                 }
             )
             print("Setting eig_lowerbound to", self.eig_lowerbound)
-
-        self.trust0 = self._po._options["trust0"]
-        self.finite_difference_h = self._po._options["finite_difference_h"]
+        else:
+            self.eig_lowerbound = self._po._options["eig_lowerbound"]
 
         while True:
             try:
@@ -2650,9 +2657,9 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 # self._po._options["forcefield"] = [newff_name]
                 print("Calculating new gradient with split param")
 
-                self._po.logger.setLevel(logging.ERROR)
+                # self._po.logger.setLevel(logging.ERROR)
                 success = self._run_optimizer(jobtype)
-                self._po.logger.setLevel(self.logger.getEffectiveLevel())
+                # self._po.logger.setLevel(self.logger.getEffectiveLevel())
 
                 if not success:
                     print("Gradient failed for this split; skipping")
@@ -2788,6 +2795,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 self.node_index.pop(node.index)
                 self.db.pop(node.payload)
                 break
+
+        print("First scoring pass complete; assessing candidates")
 
         if len(candidates):
 
@@ -3642,9 +3651,9 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         self._po.ff_fname = newff_name
         self._po._init = False
 
-        if self.trust0 is None:
-            self.trust0 = 0.25
-        self.finite_difference_h = None
+        # if self.trust0 is None:
+        #     self.trust0 = 0.25
+        # self.finite_difference_h = None
 
         jobtype = "OPTIMIZE"
         if not optimize_initial:
