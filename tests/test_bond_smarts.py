@@ -17,12 +17,13 @@ def test_bond():
     b = offsb.chem.types.BondGraph()
     b._atom2._H[1] = True
 
-    # this one is tricky since this will match the LHS
-    # but if we want to take out this bit, we need to 
     assert b  in a
 
     assert (a - b) in a
-    assert a not in (a - b)
+
+    # get rid of the old case where we swapped if it wasn't in that position
+    # less of an issue now that SMARTS can be aligned
+    # assert a not in (a - b)
 
     b._atom2._H[2] = True
 

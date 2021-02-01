@@ -19,7 +19,6 @@ def test_angle_bit_flip():
     ans = a.to_smarts() == b.to_smarts()
     assert not ans
 
-    breakpoint()
     a.align_to(b)
 
     ans = a.to_smarts() == b.to_smarts()
