@@ -884,6 +884,11 @@ class AtomType(ChemType):
         return cls
 
     @classmethod
+    def from_string_list(cls, string_list, sorted=False):
+        atom1 = AtomType.from_string(string_list[0])
+        return cls(atom1)
+
+    @classmethod
     def parse_string(self, string, unspecified_matches_all=True):
         """"""
 
