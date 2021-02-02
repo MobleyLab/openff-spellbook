@@ -3,6 +3,7 @@ import os
 import pickle
 import sys
 import traceback
+import copy
 
 import numpy as np
 
@@ -1214,9 +1215,49 @@ class QCArchiveSpellBook:
         query.apply(targets=targets)
 
         op = op_cls(query, name)
+        op.processes = None
         op.apply(targets=targets)
-        op.to_pickle()
+        # op.to_pickle()
         return op
+
+    def measure_internal_coordinates(self, targets=None):
+        from offsb.op.geometry import BondOperation, AngleOperation, TorsionOperation, ImproperTorsionOperation
+        from offsb.search.smiles import SmilesSearchTree
+
+        smi_list = {
+            "Bonds": "[*]~[*]",
+            "Angles": "[*]~[*]~[*]",
+            "ProperTorsions": "[*]~[*]~[*]~[*]",
+            "ImproperTorsions": "[*]~[*](~[*])~[*]",
+        }
+
+        op_list = {
+            "Bonds": BondOperation,
+            "Angles": AngleOperation,
+            "ProperTorsions": TorsionOperation,
+            "ImproperTorsions": ImproperTorsionOperation
+        }
+        query = SmilesSearchTree(list(smi_list.values()), self.QCA, "query")
+        query.apply(targets=targets)
+
+        ret = {}
+
+        for name, op_fn in op_list.items():
+            op_query = copy.deepcopy(query)
+            for entry, val in op_query.db.items():
+                val = val['data']
+                for smi in list(val):
+                    if smi != smi_list[name]:
+                        val.pop(smi)
+
+            op = op_fn(op_query, name)
+            op.processes = 1
+            op.verbose=True
+            op.apply(targets=targets)
+            ret[name] = op
+
+        return ret
+
 
     def measure_bonds(self, name, targets=None):
         from offsb.op.geometry import BondOperation as OP

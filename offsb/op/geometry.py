@@ -13,6 +13,7 @@ class GeometryOperation(offsb.treedi.tree.TreeOperation, ABC):
         super().__init__(source, name, verbose=verbose)
         self._select = "Molecule"
         self.processes = 1
+        self._atoms = 0
 
     def _unpack_result(self, ret):
         self.db.update(ret)
@@ -80,6 +81,7 @@ class GeometryOperation(offsb.treedi.tree.TreeOperation, ABC):
             "name": self.name,
             "op": self.op,
             "entry": entry_name,
+            "atoms": self._atoms,
         }
 
     @staticmethod
@@ -92,6 +94,7 @@ class GeometryOperation(offsb.treedi.tree.TreeOperation, ABC):
         mol = kwargs["mol"]
         op = kwargs["op"]
         entry = kwargs["entry"]
+        atoms = kwargs["atoms"]
         map_idx = kwargs["map_idx"]
 
         ret = {}
@@ -100,6 +103,8 @@ class GeometryOperation(offsb.treedi.tree.TreeOperation, ABC):
         debug_str = ""
 
         for mask in masks:
+            if len(mask) != atoms:
+                continue
 
             if map_idx is not None:
                 mask_mapped = tuple([map_idx[i] - 1 for i in mask])
@@ -129,8 +134,9 @@ class GeometryOperation(offsb.treedi.tree.TreeOperation, ABC):
 
 
 class AngleOperation(GeometryOperation):
-    def __init__(self, source, name):
-        super().__init__(source, name)
+    def __init__(self, source, name, verbose=False):
+        super().__init__(source, name, verbose=verbose)
+        self._atoms = 3
 
     @staticmethod
     def measure(mol, idx):
@@ -154,6 +160,7 @@ class AngleOperation(GeometryOperation):
 class BondOperation(GeometryOperation):
     def __init__(self, source, name):
         super().__init__(source, name)
+        self._atoms = 2
 
     @staticmethod
     def measure(mol, idx):
@@ -169,6 +176,7 @@ class BondOperation(GeometryOperation):
 class TorsionOperation(GeometryOperation):
     def __init__(self, source, name):
         super().__init__(source, name)
+        self._atoms = 4
 
     @staticmethod
     def measure(mol, idx):
@@ -305,8 +313,9 @@ class TorsionOperation(GeometryOperation):
 
 
 class ImproperTorsionOperation(GeometryOperation):
-    def __init__(self, source, name):
+    def __init__(self, source, name, verbose=False):
         super().__init__(source, name)
+        self._atoms = 4
 
     @staticmethod
     def measure(mol, idx):
