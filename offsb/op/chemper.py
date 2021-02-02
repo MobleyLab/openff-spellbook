@@ -4,6 +4,7 @@ import offsb.treedi.tree
 import offsb.op.geometry
 import re
 from chemper.smirksify import SMIRKSifier
+import offsb.chem.types
 
 
 class ChemperOperation(offsb.treedi.tree.TreeOperation):
@@ -31,9 +32,8 @@ class ChemperOperation(offsb.treedi.tree.TreeOperation):
     def __init__(self, source, name):
         super().__init__(source, name)
         self._select = "Entry"
-        # for some reason, multiprocess doesn't work... it mixes the entries and
-        # data, so it becomes out of sync
-        self.processes = 1
+        self.processes = None
+        self.chembit = False
 
     @staticmethod
     def _smirks_splitter(smirks, atoms=2):
@@ -55,10 +55,13 @@ class ChemperOperation(offsb.treedi.tree.TreeOperation):
     def _unpack_result(self, val):
         self.db.update(val)
 
-    def _generate_apply_kwargs(self, i, target, kwargs={}):
+    def _generate_apply_kwargs(self, i, target, kwargs=None):
 
         # labels = self.source.db[target.payload]["data"]
         entry = self.source.source.db[target.payload]["data"]
+
+        if kwargs is None:
+            kwargs = {}
 
         out_str = ""
         smi = entry.attributes["canonical_isomeric_explicit_hydrogen_mapped_smiles"]
@@ -96,7 +99,8 @@ class ChemperOperation(offsb.treedi.tree.TreeOperation):
             "masks": masks,
             "mol": mol,
             "name": self.name,
-            "entry": str(entry)
+            "entry": str(entry),
+            "chembit": self.chembit
         })
         return kwargs
 
@@ -109,11 +113,22 @@ class ChemperOperation(offsb.treedi.tree.TreeOperation):
         target : EntryNode
             A node that 
         """
-
         if "error" in kwargs:
             return {
                 target.payload: "Could not run Chemper:\n" + kwargs["error"],
                 "return": {"data": {}},
+            }
+
+        chembit = kwargs.get("chembit", False)
+
+        prim_to_graph = None
+        if chembit:
+            prim_to_graph = {
+                "n": offsb.chem.types.AtomType,
+                "b": offsb.chem.types.BondGraph,
+                "a": offsb.chem.types.AngleGraph,
+                "i": offsb.chem.types.OutOfPlaneGraph,
+                "t": offsb.chem.types.TorsionGraph,
             }
 
         mol = kwargs["mol"]
@@ -140,6 +155,25 @@ class ChemperOperation(offsb.treedi.tree.TreeOperation):
                     chemper[mask] = ChemperOperation._smirks_splitter(
                         fier.current_smirks[0][1], len(mask)
                     )
+                    if chembit:
+
+                        ic_type = 0
+                        if len(mask) == 1:
+                            ic_type = 'n'
+                        if len(mask) == 2:
+                            ic_type = 'b'
+                        elif len(mask) == 3:
+                            ic_type = 'a'
+                        elif len(mask) == 4:
+                            if '(' in fier.current_smirks[0][1]:
+                                ic_type = 'i'
+                            else:
+                                ic_type = 't'
+
+                        chemper[mask] = prim_to_graph[ic_type].from_string_list(
+                            chemper[mask], sorted=True
+                        )
+
                 except Exception:
                     breakpoint()
 
