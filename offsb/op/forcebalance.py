@@ -158,14 +158,14 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         # The general options and target options that come from parsing the input file
         if os.path.exists("optimize.in"):
             self._options, self._tgt_opts = parse_inputs("optimize.in")
-            print("Current options overridden")
-            for k,v in self.options_override.items():
-                print(k,v)
+            # print("Current options overridden")
+            # for k,v in self.options_override.items():
+            #     print(k,v)
             self._options.update(self.options_override)
             if options_override is not None:
-                print("Overriding new options:")
-                for k,v in options_override.items():
-                    print(k,v)
+                # print("Overriding new options:")
+                # for k,v in options_override.items():
+                #     print(k,v)
                 self._options.update(options_override)
             # self.options_override = None
         elif options_override is not None:
