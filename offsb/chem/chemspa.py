@@ -2305,19 +2305,19 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             options_override["trust0"] = self.trust0
             print("Setting trust0 to", self.trust0)
         else:
-            self.trust0 = self._po._options["trust0"]
+            self.trust0 = self._po._options.get("trust0")
 
         if self.finite_difference_h is not None:
             options_override["finite_difference_h"] = self.finite_difference_h
             print("Setting finite_difference_h to", self.finite_difference_h)
         else:
-            self.finite_difference_h = self._po._options["finite_difference_h"]
+            self.finite_difference_h = self._po._options.get("finite_difference_h")
 
         if self.eig_lowerbound:
             options_override["eig_lowerbound"] = self.eig_lowerbound
             print("Setting eig_lowerbound to", self.eig_lowerbound)
         else:
-            self.eig_lowerbound = self._po._options["eig_lowerbound"]
+            self.eig_lowerbound = self._po._options.get("eig_lowerbound")
 
         while True:
             try:
@@ -2353,6 +2353,11 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 mintrust = self._po._options["mintrust"]
                 if self.trust0 < mintrust:
                     return False
+
+        self.trust0 = self._po._options.get("trust0")
+        self.finite_difference_h = self._po._options.get("finite_difference_h")
+        self.eig_lowerbound = self._po._options.get("eig_lowerbound")
+
         return True
 
     def _optimize_type_iteration(
