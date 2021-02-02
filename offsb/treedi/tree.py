@@ -1,6 +1,7 @@
 import logging
 import sys
 from abc import ABC, abstractmethod
+import traceback
 
 import tqdm
 
@@ -535,9 +536,10 @@ class TreeOperation(PartitionTree):
 
             self._unpack_work(work)
         except Exception as e:
-            breakpoint()
             self.logger.error("Exception!")
+            traceback.print_exc()
             self.logger.error(e)
+            breakpoint()
             # for concurrent, use this and shutdown(wait=False) instead
             # [job.cancel() for job in work]
             exe.terminate()
