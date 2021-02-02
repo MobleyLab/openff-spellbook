@@ -2304,19 +2304,19 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         if self.trust0 is not None:
             options_override["trust0"] = self.trust0
             print("Setting trust0 to", self.trust0)
-        else:
+        elif self._po._options:
             self.trust0 = self._po._options.get("trust0")
 
         if self.finite_difference_h is not None:
             options_override["finite_difference_h"] = self.finite_difference_h
             print("Setting finite_difference_h to", self.finite_difference_h)
-        else:
+        elif self._po._options:
             self.finite_difference_h = self._po._options.get("finite_difference_h")
 
         if self.eig_lowerbound:
             options_override["eig_lowerbound"] = self.eig_lowerbound
             print("Setting eig_lowerbound to", self.eig_lowerbound)
-        else:
+        elif self._po._options:
             self.eig_lowerbound = self._po._options.get("eig_lowerbound")
 
         while True:
