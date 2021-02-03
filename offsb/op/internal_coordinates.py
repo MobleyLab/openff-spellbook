@@ -83,7 +83,8 @@ class InteralCoordinateGeometricOperation(offsb.treedi.tree.TreeOperation, ABC):
     def _unpack_result(self, ret):
         self.db[ret[0]] = {"data": ret[1]}
 
-    def apply_single(self, i, target, **kwargs):
+    @staticmethod
+    def apply_single(i, target, **kwargs):
 
         out_str = ""
 
