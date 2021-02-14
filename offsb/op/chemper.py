@@ -253,3 +253,101 @@ class ChemperOperation(offsb.treedi.tree.TreeOperation):
                 for line in sorted(lines, key=lambda x: "".join(x.split()[1:])):
                     print(line)
 
+class AtomDescriminationOperation(offsb.treedi.tree.TreeOperation):
+    """
+    Attempts to make each atom as unique as possible given the chembi 
+    This means I need all bonds to operate
+    Then, in each entry, for each atom, I have a subgraph containing chembis
+    This means each atom is a "molecule graph"
+    Start with each atom and generate a graph, containing one node
+    Then iterate all molecules, making as many unique things as possible,
+    extending down into new levels only when necessary
+    definitely needs a tree of molecules
+    """
+
+    def __init__(self):
+        self.query = 2
+        self.chemper = 4
+        pass
+
+    def _unpack_result(self, val):
+        self.db.update(val)
+
+    def _generate_apply_kwargs(self, i, target, kwargs=None):
+
+        # labels = self.source.db[target.payload]["data"]
+        entry = self.source.source.db[target.payload]["data"]
+
+        if kwargs is None:
+            kwargs = {}
+
+        out_str = ""
+        smi = entry.attributes["canonical_isomeric_explicit_hydrogen_mapped_smiles"]
+        if "initial_molecule" in entry.dict():
+            qcid = entry.dict()["initial_molecule"]
+        elif "initial_molecules" in entry.dict():
+            qcid = entry.dict()["initial_molecules"]
+        else:
+            out_str += "{:d} initial mol was empty: {:s}".format(i, str(qcid))
+            return {"error": out_str}
+
+        if isinstance(qcid, set):
+            qcid = list(qcid)
+        if isinstance(qcid, list):
+            qcid = str(qcid[0])
+
+        qcmolid = "QCM-" + qcid
+
+        if qcmolid not in self.source.source.db:
+            out_str += "{:d} initial mol was empty: {:s}".format(i, str(qcmolid))
+            return {"error": out_str}
+
+        if "data" in self.source.source.db.get(qcmolid):
+            qcmol = self.source.source.db.get(qcmolid).get("data")
+        else:
+            out_str += "{:d} initial mol was empty: {:s}".format(i, str(qcmolid))
+            return {"error": out_str}
+
+        mol = offsb.rdutil.mol.rdmol_from_smiles_and_qcmol(smi, qcmol)
+
+        obj = self.source.db[self.source[target.index].payload]
+        masks = obj["data"]
+
+        kwargs.update({
+            "masks": masks,
+            "mol": mol,
+            "name": self.name,
+            "entry": str(entry),
+            "chembit": self.chembit
+        })
+        return kwargs
+
+    def _check_if_done(self):
+        return True
+
+    def apply(self, targets=None):
+        # apply using a parallel reduction; is this going to be too expensive for
+        # larger datasets?
+        while True:
+            super().apply()
+            if self._check_if_done():
+                break
+
+    @staticmethod
+    def apply_single(i, target, **kwargs):
+        """
+        uniquify a single molecule, using a reference list to check for existing patterns
+        so this will generate the entire tree for a molecule
+        
+        then, it does another round with another group to combine
+
+
+        
+
+        """
+        pass
+
+    def op(self, target, partition):
+        pass
+
+

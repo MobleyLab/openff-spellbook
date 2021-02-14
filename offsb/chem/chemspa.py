@@ -12,12 +12,6 @@ import sys
 import tempfile
 
 import numpy as np
-import simtk.unit
-import tqdm
-from openforcefield.typing.engines.smirnoff import ForceField
-from openforcefield.typing.engines.smirnoff.parameters import (
-    AngleHandler, BondHandler, ImproperDict, ImproperTorsionHandler,
-    ParameterList, ProperTorsionHandler, ValenceDict, vdWHandler)
 
 import offsb.chem.types
 import offsb.op.chemper
@@ -27,7 +21,13 @@ import offsb.tools.const
 import offsb.treedi.node
 import offsb.treedi.tree
 import offsb.ui.qcasb
+import simtk.unit
+import tqdm
 from offsb.treedi.tree import DEFAULT_DB
+from openforcefield.typing.engines.smirnoff import ForceField
+from openforcefield.typing.engines.smirnoff.parameters import (
+    AngleHandler, BondHandler, ImproperDict, ImproperTorsionHandler,
+    ParameterList, ProperTorsionHandler, ValenceDict, vdWHandler)
 
 VDW_DENOM = 10.0
 
@@ -246,10 +246,10 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 if renumber:
                     ff_param.id = num_map[param.id]
                 ff_param.smirks = ""
-                print(
-                    "  " + "      " * visible_node_depth(param_node),
-                    self.db[param_node.payload]["data"]["group"],
-                )
+                # print(
+                #     "  " + "      " * visible_node_depth(param_node),
+                #     self.db[param_node.payload]["data"]["group"],
+                # )
                 smarts = self.db[param_node.payload]["data"]["group"].to_smarts()
                 print(
                     "  " + "      " * visible_node_depth(param_node),
@@ -766,6 +766,13 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             {"data": {"parameter": new_param, "group": child}}
         )
         return pnode
+
+    def _descriminate_atoms(self):
+
+        # loop through atoms
+        # generate a networkx graph of each
+
+        pass
 
     def _scan_param_with_bit(
         self,
@@ -1313,6 +1320,20 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 print(group)
                 print("\nFF param for ", lbl, "is:")
                 print(param_group)
+
+            # Try to find the magical split from the raw param_data
+            # However this only works for
+            # breakpoint()
+            # for prim_data in param_data[lbl]:
+            #     x = 5
+
+            #     bit_gradients.append(x)
+
+            # The original tier 1 score; go through every bit and try to find the
+            # best split
+            # Need to support a way that inverts this: look at the data, then try
+            # to segment it
+            # This means trying to take the raw data, then try to cluster it
 
             n_bits[lbl] = sum([1 for x in group])
             bit_visited = {}
@@ -2003,7 +2024,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 continue
             primitives = self._to.db[entry.payload]["data"]
 
-            for molecule in QCA.node_iter_depth_first(entry, select="Molecule"):
+            # This is for per-molecule info
+            for molecule in QCA.node_iter_depth_first(entry):
                 mol_id = molecule.payload
 
                 obj = self._po.db.get(mol_id)
@@ -2012,6 +2034,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
                 obj = obj["data"]
 
+                # This is for an optgeo style, where there is a direct
+                # objective per IC
                 # IC keys (not vdW)
                 for key in [k for k in obj if type(k) == tuple and k in labels]:
                     matched_params = []
@@ -2038,8 +2062,9 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                         param_data[lbl][prim] = [matched_params]
                         all_data[lbl][prim] = [obj[key]["dV"]]
 
-                    param_data[lbl][prim].append(matched_params)
-                    all_data[lbl][prim].append(obj[key]["dV"])
+                    else:
+                        param_data[lbl][prim].append(matched_params)
+                        all_data[lbl][prim].append(obj[key]["dV"])
 
                 # vdW keys (gradient spread out evenly over atoms)
                 # sums the two terms (e.g. epsilon and rmin_half)
@@ -2049,6 +2074,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 # for example the gradient sum for n1 epsilon and rmin_half
                 # will be equal to the sum of all atoms that match n1 (0,), (1,), etc.
                 vdw_keys = [x for x in labels if len(x) == 1]
+                vdw_keys = [x for x in labels]
                 for key in vdw_keys:
                     ff_grad = []
                     matched_params_idx = [
@@ -2059,11 +2085,14 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                         # so we can safely skip
                         continue
 
-                    # this is the sum over all IC, for FF param i (the vdW terms)
                     for i in matched_params_idx:
-                        ff_grad.append(
-                            sum([obj[k]["dV"][i] for k in obj if type(k) == tuple])
-                        )
+                        try:
+                            ff_grad.append(
+                                sum([obj[k]["dV"][i] for k in obj if type(k) == tuple] + [obj["dV"][i]])
+                            )
+                        except Exception as e:
+                            breakpoint()
+                            print("error")
 
                     # since we are applying the entire FF gradient to this single
                     # IC, we need to divide by the number of ICs which also match
@@ -2075,26 +2104,121 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                     # similar to existing parameters; it is currently chosen to
                     # be on the scale of bonds (very sensitive)
 
+                    denom = 1.0 if len(key) > 1.0 else VDW_DENOM
                     for i, _ in enumerate(ff_grad):
                         ff_grad[i] /= (
                             len([x for x in vdw_keys if labels[x] == labels[key]])
-                            * VDW_DENOM
+                            * denom
                             # * len(param_labels)
                         )
 
                     matched_params = ff_grad
                     all_params = list([np.mean(ff_grad)] * len(param_labels))
                     lbl = labels[key]
-                    prim = prim_to_graph[lbl[0]].from_string(primitives[key][0])
+                    prim = prim_to_graph[lbl[0]].from_string_list(primitives[key])
                     if lbl not in param_data:
                         param_data[lbl] = {}
                         all_data[lbl] = {}
                     if prim not in param_data[lbl]:
                         param_data[lbl][prim] = [matched_params]
                         all_data[lbl][prim] = [all_params]
+                    else:
+                        param_data[lbl][prim].append(matched_params)
+                        all_data[lbl][prim].append(all_params)
+            # for object in QCA.node_iter_depth_first(entry):
+            #     if object.name == "Molecule":
+            #         continue
+            #     object_id = object.payload
 
-                    param_data[lbl][prim].append(matched_params)
-                    all_data[lbl][prim].append(all_params)
+            #     obj = self._po.db.get(object_id)
+            #     if obj is None:
+            #         continue
+
+            #     obj = obj["data"]
+
+            #     # IC keys (not vdW)
+            #     for key in [k for k in obj if type(k) == tuple and k in labels]:
+            #         matched_params = []
+            #         for j, val in enumerate(obj[key]["dV"]):
+            #             if labels[key] == param_labels[j]:
+            #                 matched_params.append(val)
+
+            #         lbl = labels[key]
+
+            #         if len(matched_params) == 0:
+            #             # print("This label didn't match:", key, "actual label", labels[key])
+            #             # print("Debug: param_labels is", param_labels )
+            #             # if we have no matches, then likely we are not trying to
+            #             # fit to it, so we can safely skip
+            #             continue
+
+            #         # if lbl == 't3':
+            #         #     breakpoint()
+            #         prim = prim_to_graph[lbl[0]].from_string_list(primitives[key])
+            #         if lbl not in param_data:
+            #             param_data[lbl] = {}
+            #             all_data[lbl] = {}
+            #         if prim not in param_data[lbl]:
+            #             param_data[lbl][prim] += [matched_params]
+            #             all_data[lbl][prim] += [obj[key]["dV"]]
+
+            #         param_data[lbl][prim].append(matched_params)
+            #         all_data[lbl][prim].append(obj[key]["dV"])
+
+            #     # vdW keys (gradient spread out evenly over atoms)
+            #     # sums the two terms (e.g. epsilon and rmin_half)
+            #     # then divides by the number of atoms and the number
+            #     # of ff terms. This aims to make the FF param gradient sum
+            #     # and the IC sum equivalent (but spread over atoms), so
+            #     # for example the gradient sum for n1 epsilon and rmin_half
+            #     # will be equal to the sum of all atoms that match n1 (0,), (1,), etc.
+            #     vdw_keys = [x for x in labels if len(x) == 1]
+            #     for key in vdw_keys:
+            #         ff_grad = []
+            #         matched_params_idx = [
+            #             i for i, lbl in enumerate(param_labels) if lbl == labels[key]
+            #         ]
+            #         if len(matched_params_idx) == 0:
+            #             # This means that we are not considering this param,
+            #             # so we can safely skip
+            #             continue
+
+            #         # this is the sum over all IC, for FF param i (the vdW terms)
+            #         for i in matched_params_idx:
+            #             ff_grad.append(
+            #                 sum([obj[k]["dV"][i] for k in obj if type(k) == tuple])
+            #             )
+
+            #         # since we are applying the entire FF gradient to this single
+            #         # IC, we need to divide by the number of ICs which also match
+            #         # this param. This causes the gradient to be spread out over
+            #         # all matched ICs
+            #         # Also, we need to spread out over the entire parameter list
+            #         # so divide by number of FF params as well
+            #         # Finally, we need a denom-like scalar to make the magnitudes
+            #         # similar to existing parameters; it is currently chosen to
+            #         # be on the scale of bonds (very sensitive)
+
+            #         for i, _ in enumerate(ff_grad):
+            #             ff_grad[i] /= (
+            #                 len([x for x in vdw_keys if labels[x] == labels[key]])
+            #                 * VDW_DENOM
+            #                 # * len(param_labels)
+            #             )
+
+            #         matched_params = ff_grad
+            #         all_params = list([np.mean(ff_grad)] * len(param_labels))
+            #         lbl = labels[key]
+            #         prim = prim_to_graph[lbl[0]].from_string(primitives[key][0])
+            #         if lbl not in param_data:
+            #             param_data[lbl] = {}
+            #             all_data[lbl] = {}
+            #         if prim not in param_data[lbl]:
+            #             param_data[lbl][prim] = [matched_params]
+            #             all_data[lbl][prim] = [all_params]
+
+            #         param_data[lbl][prim].append(matched_params)
+            #         all_data[lbl][prim].append(all_params)
         return param_data, all_data
 
     def _plot_gradients(self, fname_prefix=""):
@@ -2297,7 +2421,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
 
         self.prim_dict = prim_dict
 
-    def _run_optimizer(self, jobtype):
+    def _run_optimizer(self, jobtype, keep_state=False):
         newff_name = "tmp.offxml"
 
         options_override = {}
@@ -2319,10 +2443,15 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         elif self._po._options:
             self.eig_lowerbound = self._po._options.get("eig_lowerbound")
 
+        trust = self.trust0
+        fdh = self.finite_difference_h
+        eps = self.eig_lowerbound
+
         while True:
             try:
                 self._po.load_options(options_override=options_override)
-                self.to_smirnoff_xml(newff_name, verbose=False)
+                print("Running calculation! Below is the FF")
+                self.to_smirnoff_xml(newff_name, verbose=True)
                 self._po._setup.ff_fname = newff_name
                 self._po.ff_fname = newff_name
                 self._po._init = False
@@ -2354,9 +2483,21 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 if self.trust0 < mintrust:
                     return False
 
-        self.trust0 = self._po._options.get("trust0")
-        self.finite_difference_h = self._po._options.get("finite_difference_h")
-        self.eig_lowerbound = self._po._options.get("eig_lowerbound")
+        if keep_state:
+            self.trust0 = self._po._options.get("trust0")
+            self.finite_difference_h = self._po._options.get("finite_difference_h")
+            self.eig_lowerbound = self._po._options.get("eig_lowerbound")
+        else:
+            self.trust0 = trust
+            self.finite_difference_h = fdh
+            self.eig_lowerbound = eps
+
+        self.finite_difference_h = fdh
+        if self.trust0 < 1e-6:
+            self.finite_difference_h = fdh * (1e-6 / self.trust0) 
+
+        self.trust = max(1e-5, self.trust0)
+
 
         return True
 
@@ -2383,6 +2524,10 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         grad = 0
         i = 0
         node = None
+        base_ref_obj = self._po.X
+        ref_obj = self._po.X
+        has_ref_obj = base_ref_obj is not None
+        grad_scale = 1.0
 
         bit_gradients = []
 
@@ -2395,23 +2540,21 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         # BREAK
         # breakpoint()
 
-        if use_gradients:
+        if use_gradients and not has_ref_obj:
             print("Running reference gradient calculation...")
 
-            success = self._run_optimizer(jobtype)
+            success = self._run_optimizer(jobtype, keep_state=False)
 
             if not success:
                 print("Reference gradient calculation failed; cannot continue!")
                 return None, np.inf, -np.inf
 
             obj = self._po.X
-
-            grad_scale = 1.0
-
             grad = self._po.G
-            best = [None, grad * grad_scale, obj, None, None, -1, None, None, self.db]
+
+            best = [None, grad * grad_scale, obj, None, None, -1, None, None, self.db.copy()]
         else:
-            best = [None, np.inf, np.inf, None, None, -1, None, None, self.db]
+            best = [None, self._po.G, self._po.X, None, None, -1, None, None, self.db.copy()]
 
         param_data = self._combine_reference_data()
 
@@ -2419,7 +2562,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         self.print_label_assignments()
 
         current_ff = "tmp.offxml"
-        self.to_smirnoff_xml(current_ff, verbose=False)
+        # self.to_smirnoff_xml(current_ff, verbose=False)
 
         bit_gradients = []
         bit_cache = {}
@@ -2427,20 +2570,6 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         olddb = copy.deepcopy(self._po.db)
 
         eps = 1.0
-
-        if use_gradients:
-            print("Running reference gradient calculation...")
-
-            success = self._run_optimizer(jobtype)
-            if not success:
-                print("Reference gradient calculation failed; cannot continue!")
-                return None, np.inf
-
-            obj = self._po.X
-
-            grad_scale = 1.0
-
-            grad = self._po.G
 
         # This generates the tier 1 scoring data
         if split_strategy == "spatial_reference":
@@ -2515,7 +2644,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 print("Calculating new gradient with split param")
 
                 # self._po.logger.setLevel(logging.ERROR)
-                success = self._run_optimizer(jobtype)
+                success = self._run_optimizer(jobtype, keep_state=False)
                 # self._po.logger.setLevel(self.logger.getEffectiveLevel())
 
                 if not success:
@@ -2523,7 +2652,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                     # if there is an exception, the po will have no data
                     self._po.db = olddb
                 else:
-                    ref_obj = self._po.X
+                    obj = self._po.X
                     grad_new = self._po.G
                     print(
                         "\ngrad_new",
@@ -2535,13 +2664,14 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                         grad_new - grad * grad_scale,
                         eps,
                     )
+                    # print("\nReference Objective", ref_obj)
 
                     grad_new_opt = np.inf
                     if optimize_during_scoring:
 
                         print("Performing micro optimization for candidate")
 
-                        success = self._run_optimizer("OPTIMIZE")
+                        success = self._run_optimizer("OPTIMIZE", keep_state=False)
 
                         if success:
                             obj = self._po.X
@@ -2716,7 +2846,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                     self.to_smirnoff_xml(
                         "newFF_" + str(i) + "." + str(ii) + ".offxml", verbose=True
                     )
-                    success = self._run_optimizer("OPTIMIZE")
+                    success = self._run_optimizer("OPTIMIZE", keep_state=False)
 
                     if success:
                         obj = self._po.X
@@ -3568,7 +3698,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         #
 
         print("Performing initial objective calculation...")
-        success = self._run_optimizer(jobtype)
+        success = self._run_optimizer(jobtype, keep_state=jobtype == "GRADIENT")
         if not success:
             print("Failed. Cannot proceed.")
             return
@@ -3604,6 +3734,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                     # This objective should be exactly the same as the fit obj,
                     # but no regularization, therefore we ignore it mostly
                     current_ff = self._po.new_ff
+                    current_db = self.db.copy()
 
                     try:
                         node, grad_split, score = self._optimize_type_iteration(
@@ -3643,6 +3774,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                         obj,
                         "Delta is",
                         obj - ref,
+                        "Reference is",
+                        ref,
                         "({:8.2f}%)".format(100.0 * ((obj - ref) / ref)),
                     )
                     print(
@@ -3687,12 +3820,15 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                             if bit not in [x[1] for x in ignore_bits]:
                                 print("Adding ", bit, "to ignore")
                                 ignore_bits[(None, bit)] = [None, None]
-                            ignore_bits_optimized[(None, bit)] = ignore_bits[
-                                (None, bit)
-                            ].copy()
+                            else:
+                                bit_key = [x for x in ignore_bits if x[1] == bit][0]
+                                ignore_bits_optimized[(None, bit)] = ignore_bits[
+                                    bit_key
+                                ].copy()
                         except KeyError as e:
                             # probably a torsion or something that caused
                             # the bit calculation to fail
+                            breakpoint()
                             print("Key error during ignore add:")
                             print(e)
                             ignore_bits_optimized[(None, bit)] = [None, None]
@@ -3706,10 +3842,12 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                         # the info
                         self[node.parent].children.remove(node.index)
                         self.node_index.pop(node.index)
-                        self.db.pop(node.payload)
+                        # self.db.pop(node.payload)
+
+                        self.db = current_db
 
                         # reset the physical terms after resetting the tree
-                        self.load_new_parameters(current_ff)
+                        # self.load_new_parameters(current_ff)
 
                         if optimize_during_typing:
                             ignore_bits = ignore_bits_optimized.copy()

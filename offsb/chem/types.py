@@ -1693,6 +1693,151 @@ class ChemGraph(ChemType, abc.ABC):
     #     a, b = self.reduce_longest(o)
     #     return a != b
 
+import networkx
+class MoleculeGraph(networkx.Graph):
+    def __init__(self):
+        pass
+
+    @classmethod
+    def from_networkx(cls, graph):
+        pass
+
+    @classmethod
+    def from_string_list(cls, string_list, sorted=False):
+        atom1 = AtomType.from_string(string_list[0])
+        bond1 = BondType.from_string(string_list[1])
+        atom2 = AtomType.from_string(string_list[2])
+        if len(string_list) > 3:
+            raise NotImplementedError(
+                "The SMARTS pattern supplied has not been implemented"
+            )
+        return cls(atom1, bond1, atom2, sorted=sorted)
+
+    @classmethod
+    def _split_string(cls, string, sorted=False):
+        tokens = cls._smirks_splitter(string, atoms=2)
+        return cls.from_string_list(tokens, sorted=sorted)
+
+    def compiled_smarts(self):
+        """
+        take a list of bonds and try to produce the smallest smarts string possible
+        """
+        pass
+
+    def to_smarts(self, tag=True):
+
+        if tag:
+            return (
+                self._atom1.to_smarts(1)
+                + self._bond.to_smarts()
+                + self._atom2.to_smarts(2)
+            )
+        else:
+            return (
+                self._atom1.to_smarts()
+                + self._bond.to_smarts()
+                + self._atom2.to_smarts()
+            )
+
+    def drop(self, other):
+
+        graph = self.copy()
+        graph._atom1 = graph._atom1.drop(other._atom1)
+        graph._bond = graph._bond.drop(other._bond)
+
+        if type(other) == type(self):
+            graph._atom2 = graph._atom2.drop(other._atom2)
+
+        return graph
+
+    def _is_valid(self) -> bool:
+        return not self.is_null()
+
+    def is_primitive(self):
+
+        if super().is_null():
+            return False
+
+        if not super().is_primitive():
+            return False
+
+        return True
+
+        # Skipping these for now; do we want unbonded associations?
+        if self._atom1._X._v[0]:
+            return False
+
+        if self._atom2._X._v[0]:
+            return False
+
+        if self._atom1._H._v[0] and self._atom2._symbol._v[1]:
+            return False
+
+        if self._atom2._H._v[0] and self._atom1._symbol._v[1]:
+            return False
+
+        return True
+
+    def cluster(self, primitives=None):
+        if primitives is None:
+            primitives = self.to_primitives()
+
+        groups = {}
+        for prim in primitives:
+            a1, b, a2 = prim._atom1, prim._bond, prim._atom2
+            if a1 < a2:
+                a2, a1 = a1, a2
+            if a1 not in groups:
+                groups[a1] = []
+            groups[a1].extend([b, a2])
+
+        return groups
+
+    def to_primitives(self):
+        import tqdm
+
+        prims = []
+        for field in tqdm.tqdm(self._fields, total=len(self._fields), desc="types"):
+            obj = getattr(self, field)
+            prims.append(set(obj.to_primitives()))
+
+        ret = set()
+        for a1 in tqdm.tqdm(prims[0], total=len(prims[0]), desc="prims"):
+            for bnd in prims[1]:
+                for a2 in prims[2]:
+
+                    found = False
+                    for existing in ret:
+                        if existing._atom1 == a1:
+                            graph = BondGraph(a1, bnd, a2)
+                            found = True
+                            break
+                        elif existing._atom1 == a2:
+                            graph = BondGraph(a2, bnd, a1)
+                            found = True
+                            break
+                    if not found:
+                        if a2 > a1:
+                            graph = BondGraph(a2, bnd, a1)
+                        else:
+                            graph = BondGraph(a1, bnd, a2)
+
+                    if graph.is_primitive():
+                        ret.add(graph)
+
+        return list(ret)
+
+    def __repr__(self):
+        return (
+            "("
+            + self._atom1.__repr__()
+            + ") ["
+            + self._bond.__repr__()
+            + "] ("
+            + self._atom2.__repr__()
+            + ")"
+        )
+
 
 class BondGroup(ChemGraph):
     def __init__(self, atom1=None, bond=None, atom2=None, sorted=False):

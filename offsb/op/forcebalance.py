@@ -9,8 +9,6 @@ from collections import OrderedDict
 from io import BytesIO
 
 import numpy as np
-from openbabel import openbabel
-from rdkit import Chem
 
 import forcebalance.forcefield
 import forcebalance.target
@@ -24,9 +22,11 @@ import offsb.treedi.tree
 from forcebalance.objective import Objective
 from forcebalance.optimizer import Optimizer
 from forcebalance.parser import parse_inputs
+from openbabel import openbabel
 from openforcefield.typing.engines.smirnoff.forcefield import ForceField
 from openforcefield.typing.engines.smirnoff.parameters import (ImproperDict,
                                                                ValenceDict)
+from rdkit import Chem
 
 np.set_printoptions(linewidth=9999, formatter={"float_kind": "{:12.6e}".format})
 
@@ -79,6 +79,10 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         DummyTree.source = source_tree
 
         self.cwd = os.path.abspath(os.path.curdir)
+
+        self.X = None
+        self.G = None
+        self.H = None
 
     def _unpack_result(self, ret):
         self.db.update(ret)
@@ -210,7 +214,6 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
 
         self._options["jobtype"] = jobtype
 
-        
         self._forcefield = forcebalance.forcefield.FF(self._options)
 
         # Because ForceBalance Targets contain unpicklable objects, we must
@@ -233,12 +236,27 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         fb_logger.setLevel(logging.INFO)
         ans = optimizer.Run()
 
+
         best = optimizer.BestChk
+
 
         if best is None:
             print("best was None! breaking")
             breakpoint()
 
+        self._options["trust0"] = best["trust"]
+        self._options["finite_difference_h"] = best["finite_difference_h"]
+        self._options["eig_lowerbound"] = best["eig_lowerbound"]
+
+        print("FB: set options to")
+        print("trust0:", self._options["trust0"])
+        print("finite_difference_h:", self._options["finite_difference_h"])
+        print("eig_lowerbound:", self._options["eig_lowerbound"])
+
+        xk = best.get('xk')
+        if xk is not None:
+            optimizer.FF.make(xk, printdir=optimizer.resdir)
+        
         self.X = 0
         for tgt, dat in self._objective.ObjDict.items():
             rec = tgt.split(".")[-1]
@@ -828,9 +846,11 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
         self._abinitio = False
         self._optgeo = False
         self._vibration = False
+        self._torsiondrive = False
 
         self.td_denom = 1.0
         self.td_upper = 5.0
+        self.restrain_k = 0.0
 
         self._bond_denom = 0.05
         self._angle_denom = 8
@@ -896,6 +916,22 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
             + "\nremote 1"
             + "\n$end"
         )
+        self.fb_main_opts_td = (
+            "\n"
+            + "\n$target"
+            + "\nname {dir:s}"
+            + "\ntype TorsionProfile_SMIRNOFF"
+            + "\npdb mol.pdb"
+            + "\nmol2 mol.sdf"
+            + "\ncoords scan.xyz"
+            + "\nwritelevel 2"
+            + "\nattenuate"
+            + "\nenergy_denom {denom:f}"
+            + "\nenergy_upper {upper:f}"
+            + "\nrestrain_k {restrain_k:f}"
+            + "\nremote 1"
+            + "\n$end"
+        )
 
     def _apply_initialize(self, targets):
         pass
@@ -912,8 +948,8 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
             for target in [
                 x
                 for x, switch in zip(
-                    ["geometry", "energy", "vibration"],
-                    [self._optgeo, self._abinitio, self._vibration],
+                    ["geometry", "energy", "vibration", "torsiondrive"],
+                    [self._optgeo, self._abinitio, self._vibration, self._torsiondrive],
                 )
                 if switch
             ]:
@@ -1029,10 +1065,6 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
                     map_idx = offsb.rdutil.mol.atom_map(mol)
                     map_inv = offsb.rdutil.mol.atom_map_invert(map_idx)
 
-                    del ref_mol
-                    del mol
-                    del map_idx
-
                 if qcid == opt.initial_molecule:
                     continue
                 i = traj.index(grad_id)
@@ -1117,9 +1149,72 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
                                 )
                         fid.close()
 
+        td_dir = None
+        if is_td:
+
+            # This is a weird one: write the scan and the energy now, to avoid
+            # the unnecessary send to multiprocess
+            # This means half of the target is written now, half later (in unpack)
+            td_dir = "TD." + td.payload
+            td_dir_path = os.path.join("targets", td_dir)
+            if not os.path.exists(td_dir_path):
+                os.mkdir(td_dir_path)
+            scan_fid = open(os.path.join(td_dir_path, "scan.xyz"), "w")
+            ene_fid = open(os.path.join(td_dir_path, "qdata.txt"), "w")
+
+            grid = []
+
+            for i, opt_node in enumerate(
+                QCA.node_iter_torsiondriverecord_minimum(target, select="Optimization")
+            ):
+
+                opt = QCA.db[opt_node.payload]["data"]
+                mol_node = list(QCA.node_iter_depth_first(opt_node, select="Molecule"))[
+                    0
+                ]
+
+                constraints = list(
+                    QCA.node_iter_to_root(opt_node, select="Constraint")
+                )[::-1]
+                constraints = [x.payload[2] for x in constraints]
+                grid.append(constraints)
+
+                energies = opt.energies
+                energy = energies[-1]
+
+                qcmol = self.source.source.db.get(mol_node.payload).get("data")
+                offsb.qcarchive.qcmol_to_xyz(
+                    qcmol, fd=scan_fid, atom_map={k: v - 1 for k, v in map_idx.items()}
+                )
+                ene_fid.write("ENERGY {:16.12f}\n".format(energy))
+
+            # Since the mol2 and pdb writers use canonical ordering, we need to unmap
+            # the QCA ordering
+
+            dihedrals = entry.td_keywords.dihedrals
+            for i, _ in enumerate(dihedrals):
+                dihedrals[i] = [map_inv[j] for j in dihedrals[i]]
+
+            metadata = {"dihedrals": dihedrals, "torsion_grid_ids": grid}
+
+            with open(os.path.join(td_dir_path, "metadata.json"), "w") as metadata_fid:
+                json.dump(metadata, metadata_fid)
+
+            scan_fid.close()
+            ene_fid.close()
+
+            if len(grid) == 0:
+                kwargs["error"] = "This torsiondrive empty! ID {:s}".format(
+                    target.payload
+                )
+                shutil.rmtree(td_dir_path)
+
+        # kwargs["td_metadata"] = metadata
+        kwargs["map_inv"] = map_inv
         kwargs["geometry"] = self._optgeo
         kwargs["energy"] = self._abinitio
         kwargs["vibration"] = self._vibration
+        kwargs["torsiondrive"] = self._torsiondrive
         kwargs["has_hess"] = has_hess
         kwargs["smi"] = smi
         kwargs["mol"] = mols
@@ -1127,6 +1222,7 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
         kwargs["ene"] = enes
         kwargs["grads"] = enes
         kwargs["cwd"] = cwd
+        kwargs["td_dir"] = td_dir
         kwargs["global"] = {}
         kwargs["local"] = {}
         kwargs["is_td"] = is_td
@@ -1139,6 +1235,9 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
         if self._vibration:
             kwargs["global"]["vibration"] = self.fb_main_opts_vf
             kwargs["local"]["vibration"] = None
+        if self._torsiondrive:
+            kwargs["global"]["torsiondrive"] = self.fb_main_opts_td
+            kwargs["local"]["torsiondrive"] = None
         return kwargs
 
     def apply_single_target_objective():
@@ -1156,7 +1255,7 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
         fb_tgt_opts = kwargs["local"]
         is_td = kwargs.get("is_td", False)
 
-        # set T= 1 K
+        # set T= 298 K
         kT = offsb.tools.const.kT2kjmol / 298.0
 
         if is_td:
@@ -1174,7 +1273,10 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
                     enes[i] = 1.0 / denom
                 else:
                     enes[i] = 1.0 / np.sqrt(denom ** 2 + (e - denom) ** 2)
-            # enes = np.exp(-(offsb.tools.const.hartree2kjmol*(enes - enes.min()))/kT)/total_ene
+            # enes = (
+            #     np.exp(-(offsb.tools.const.hartree2kjmol * (enes - enes.min())) / kT)
+            #     / total_ene
+            # )
             enes /= sum(enes)
         else:
             total_ene = np.exp(
@@ -1242,6 +1344,20 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
                     "weight": 1.0,
                     "global": fb_main_opts["vibration"].format("VF." + dir),
                 }
+            if kwargs["torsiondrive"]:
+                td_dir = kwargs["td_dir"]
+                ret_obj[mol_id]["data"]["torsiondrive"] = {
+                    "dir": td_dir,
+                    "pdb": pdb_str,
+                    "sdf": mol2_str,
+                    "weight": 1.0,
+                    "global": fb_main_opts["torsiondrive"].format(
+                        dir=td_dir,
+                        denom=self.td_denom,
+                        upper=self.td_upper,
+                        restrain_k=self.restrain_k,
+                    ),
+                }
 
         return {target.payload: "", "return": ret_obj}
 
@@ -1277,6 +1393,8 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
             self._abinitio = True
         if "vibration" in fitting_targets:
             self._vibration = True
+        if "torsiondrive" in fitting_targets:
+            self._torsiondrive = True
         try:
             os.mkdir("targets")
         except Exception:
@@ -1371,8 +1489,8 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
                                 fout.write(opts)
                                 targets.append(opts)
 
-class ForceBalanceObjectiveEvaluatorSetup(offsb.treedi.tree.TreeOperation):
 
+class ForceBalanceObjectiveEvaluatorSetup(offsb.treedi.tree.TreeOperation):
     def __init__(
         self,
         fbinput_fname,
@@ -1415,37 +1533,29 @@ class ForceBalanceObjectiveEvaluatorSetup(offsb.treedi.tree.TreeOperation):
         self._improper_denom = 20
 
         self._fb_tgt_opts = {
-            "connection_options": {
-                "server_address": "localhost",
-                "server_port": 8000
-            },
+            "connection_options": {"server_address": "localhost", "server_port": 8000},
             "data_set_path": "training-set.json",
             "denominators": {
                 "Density": {
                     "@type": "openff.evaluator.unit.Quantity",
                     "unit": "g / ml",
-                    "value": 0.05
+                    "value": 0.05,
                 },
                 "EnthalpyOfMixing": {
                     "@type": "openff.evaluator.unit.Quantity",
                     "unit": "kJ / mol",
-                    "value": 1.6
-                }
+                    "value": 1.6,
+                },
             },
             "estimation_options": {
                 "batch_mode": {
                     "@type": "openff.evaluator.client.client.BatchMode",
-                    "value": "SharedComponents"
+                    "value": "SharedComponents",
                 },
-                "calculation_layers": [
-                    "SimulationLayer"
-                ]
+                "calculation_layers": ["SimulationLayer"],
             },
             "polling_interval": 600,
-            "weights": {
-                "Density": 1.0,
-                "EnthalpyOfMixing": 1.0
-            }
+            "weights": {"Density": 1.0, "EnthalpyOfMixing": 1.0},
         }
 
         self.source = DummyTree
