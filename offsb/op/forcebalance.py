@@ -85,6 +85,10 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         self.G = None
         self.H = None
 
+        self._forcefield = None
+        self._objective = None
+        # self._optimizer = None
+
     def _unpack_result(self, ret):
         self.db.update(ret)
 
