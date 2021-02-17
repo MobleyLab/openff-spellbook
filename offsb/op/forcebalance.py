@@ -8,10 +8,8 @@ import shutil
 from collections import OrderedDict
 from io import BytesIO
 
+import geometric.internal
 import numpy as np
-
-import forcebalance.forcefield
-import forcebalance.target
 import offsb.dev.hessian
 import offsb.op.chemper
 import offsb.op.openforcefield
@@ -19,14 +17,17 @@ import offsb.rdutil
 import offsb.search.smiles
 import offsb.tools.util
 import offsb.treedi.tree
+from openbabel import openbabel
+from rdkit import Chem
+
+import forcebalance.forcefield
+import forcebalance.target
 from forcebalance.objective import Objective
 from forcebalance.optimizer import Optimizer
 from forcebalance.parser import parse_inputs
-from openbabel import openbabel
 from openforcefield.typing.engines.smirnoff.forcefield import ForceField
 from openforcefield.typing.engines.smirnoff.parameters import (ImproperDict,
                                                                ValenceDict)
-from rdkit import Chem
 
 np.set_printoptions(linewidth=9999, formatter={"float_kind": "{:12.6e}".format})
 
@@ -75,7 +76,7 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
 
         self.options_override = {}
 
-        self.fitting_targets = ["geometry", "energy", "vibration"]
+        self.fitting_targets = ["geometry", "energy", "vibration", "torsiondrive"]
         DummyTree.source = source_tree
 
         self.cwd = os.path.abspath(os.path.curdir)
@@ -236,9 +237,7 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         fb_logger.setLevel(logging.INFO)
         ans = optimizer.Run()
 
-
         best = optimizer.BestChk
-
 
         if best is None:
             print("best was None! breaking")
@@ -253,11 +252,21 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         print("finite_difference_h:", self._options["finite_difference_h"])
         print("eig_lowerbound:", self._options["eig_lowerbound"])
 
-        xk = best.get('xk')
+        xk = best.get("xk")
         if xk is not None:
             optimizer.FF.make(xk, printdir=optimizer.resdir)
-        
+
+
         self.X = 0
+
+        QCA = self.source.source
+
+        # This list is all of the parameters defined in the objective
+        label_names = []
+        for x in self._forcefield.plist:
+            label_names.append(x.split("/"))
+
+
         for tgt, dat in self._objective.ObjDict.items():
             rec = tgt.split(".")[-1]
 
@@ -272,6 +281,20 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
             if tgt in ["Total", "Regularization"]:
                 continue
 
+            try:
+                proc = [x for x in QCA.node_iter_depth_first(QCA.root()) if x.payload == rec][0]
+            except Exception:
+                breakpoint()
+                print("Issue with this one")
+            try:
+                entry = next(QCA.node_iter_to_root(proc, select="Entry"))
+            except Exception:
+                breakpoint()
+                print("Issue with this one")
+
+            # This will be the parameters that we are fitting
+            labels = self._setup.labeler.db[entry.payload]['data']
+
             self.X += dat["w"] * dat["x"]
 
             IC = dat.get("IC", None)
@@ -283,6 +306,76 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
                 ret = self._generate_ic_objective_pairs(IC, dat)
                 dat = dat.copy()
                 dat.update(ret)
+            else:
+                """
+                Need to generate the ICs which correspond to the FF we are
+                fitting
+
+                This was designed with TD objective/gradient in mind, but seems
+                to work just fine for AI targets as well
+                """
+
+                off_ic_to_fb = {
+                    "Bonds": ("ic_bonds", geometric.internal.Distance),
+                    "Angles": ("ic_angles", geometric.internal.Angle),
+                    "ProperTorsions": ("ic_dihedrals", geometric.internal.Dihedral),
+                    "ImproperTorsions": ("ic_impropers", geometric.internal.OutOfPlane),
+                }
+
+                IC = {x[0]: list() for x in off_ic_to_fb.values()}
+
+                ret = {}
+
+                grad_vec = 2 * np.outer(dat["V"], dat["dV"]).sum(axis=0)
+
+                n_ic = 0
+                for i, (ph, _, _, lbl) in enumerate(label_names):
+
+                    if ph not in labels:
+                        breakpoint()
+                        print("ERROR")
+
+                    ic_type, ic_fn = off_ic_to_fb[ph]
+                    
+                    n_lbl = sum(
+                        [1 for x in labels[ph].values() if x == lbl]
+                    )
+                    n_ic += n_lbl
+                    
+
+                    # This is the assumption that all gradient info comes from
+                    # the labeled ICs, and the other ICs do not affect the 
+                    # gradient. Not the best, but I think it is better than
+                    # spreading it out to all ICs
+                    for indices, ic_lbl in labels[ph].items():
+                        if indices not in ret:
+                            ret[indices] = {"dV": np.zeros(len(grad_vec))}
+                        if lbl == ic_lbl and n_lbl > 0.0:
+                            val = grad_vec[i] / n_lbl
+                            ret[indices]["dV"][i] = val
+
+                for (ph, _, _, lbl) in label_names:
+
+                    if ph not in labels:
+                        breakpoint()
+                        print("ERROR")
+
+                    ic_type, ic_fn = off_ic_to_fb[ph]
+
+                    for indices, ic_lbl in labels[ph].items():
+                        if lbl == ic_lbl:
+                            if indices not in ret:
+                                ret[indices] = {}
+                            if "V" not in ret[indices]:
+                                ret[indices]["V"] = [(dat["V"] ** 2).sum() / n_ic]
+                            else:
+                                ret[indices]["V"].append((dat["V"] ** 2).sum() / n_ic)
+                for idx in ret:
+                    ret[idx]["V"] = sum(ret[idx]["V"])
+
+                # ret = self._generate_ic_objective_pairs(IC, dat)
+                dat = dat.copy()
+                dat.update(ret)
 
             if rec not in self.db:
                 self.db[rec] = {"data": dat}
@@ -292,15 +385,15 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         # might be safer?
         self.X = best["X"]
 
-        dv = None
-        for mol in self.db.values():
-            mol = mol["data"]
-            for k in mol:
-                if type(k) is tuple and "dV" in mol[k]:
-                    if dv is None:
-                        dv = mol["w"] * mol[k]["dV"]
-                    else:
-                        dv += mol["w"] * mol[k]["dV"]
+        # dv = None
+        # for mol in self.db.values():
+        #     mol = mol["data"]
+        #     for k in mol:
+        #         if type(k) is tuple and "dV" in mol[k]:
+        #             if dv is None:
+        #                 dv = mol["w"] * mol[k]["dV"]
+        #             else:
+        #                 dv += mol["w"] * mol[k]["dV"]
 
         # also safer since above only works for optgeo at the moment
         self.G = np.linalg.norm(best["G"])
@@ -362,8 +455,14 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
             if os.path.exists(fname):
                 os.remove(fname)
 
-    def _generate_ic_objective_pairs(self, IC_dict, ans, i=None):
+    def _generate_ic_objective_pairs(self, IC_dict, ans, i=None, ic_objective=True):
 
+        """
+        if IC_dict is None, then we assume this is a target that measures
+        non-IC objectives, such as energy. In this case, we take the gradients
+        and spread them evenly across the ICs determined by the parameters
+        we are fitting
+        """
         ret = {}
 
         if i is None:
@@ -402,6 +501,7 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
             vals = 2 * v * ans["dV"][:, i]
             ret[integer_indices] = {"V": v ** 2, "dV": vals}
             i += 1
+
         return ret
 
     def apply_single(self, i, target, **kwargs):
