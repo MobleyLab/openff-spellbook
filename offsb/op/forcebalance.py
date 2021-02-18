@@ -1318,7 +1318,7 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
         kwargs["geometry"] = self._optgeo
         kwargs["energy"] = self._abinitio
         kwargs["vibration"] = self._vibration
-        kwargs["torsiondrive"] = self._torsiondrive
+        kwargs["torsiondrive"] = self._torsiondrive and is_td
         kwargs["has_hess"] = has_hess
         kwargs["smi"] = smi
         kwargs["mol"] = mols
