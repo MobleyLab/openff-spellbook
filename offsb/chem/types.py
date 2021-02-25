@@ -1,14 +1,12 @@
 # /usr/bin/env python3
 
 import abc
-import functools
-import itertools as it
+import itertools
 import re
-import sys
-from typing import List
 
 import numpy as np
-import tqdm
+
+HYDROGEN_ONE_BIT = True
 
 
 class ChemTypeComparisonException(Exception):
@@ -29,11 +27,19 @@ class BitVec:
 
     def __init__(self, vals=None, inv=False, maxbits=np.inf):
 
-        if vals is None:
-            self._v = np.array([False], dtype=bool)
-        else:
-            self._v = np.array(vals, dtype=bool)
+        self._v = np.array([False], dtype=bool)
         self._inv = inv
+
+        if vals is None:
+            pass
+        elif hasattr(vals, "__iter__"):
+            # assumes a list of bools
+            self._v = np.array(vals, dtype=bool)
+        elif np.isinf(vals):
+            self._inv = np.sign(vals) ^ inv
+        else:
+            self[vals] = True
+
         self.maxbits = maxbits
         self.trim()
         self.fmt = "{:>2s}"
@@ -147,7 +153,9 @@ class BitVec:
             else:
                 self._v[i] = self.inv ^ v
         else:
-            raise Exception("Using this datatype for setitem not supported")
+            raise Exception(
+                "Using datatype {} for setitem not supported".format(type(i))
+            )
         self.trim()
 
     def __len__(self):
@@ -212,7 +220,7 @@ class BitVec:
     def reduce_longest(self, o):
         """"""
 
-        pairs = list(it.zip_longest(self.v, o.v, fillvalue=False))
+        pairs = list(itertools.zip_longest(self.v, o.v, fillvalue=False))
         pairs = np.vstack(([(self.inv, o.inv)], pairs))
 
         suma = np.sum(
@@ -350,6 +358,15 @@ class ChemType(abc.ABC):
     def is_valid(self) -> bool:
         return self._is_valid()
 
+    def __repr__(self):
+        ret = " ".join(
+            [
+                "{}: {}".format(name, getattr(self, self._field_map[name]))
+                for name in self._field_vars
+            ]
+        )
+        return ret
+
     def __iter__(self):
 
         """
@@ -373,7 +390,7 @@ class ChemType(abc.ABC):
         if len(fields) == 0:
             return
         if len(pos) == len(fields):
-            ret = [field[i] ^ field.inv for field, i in zip(fields.values(), pos)]
+            ret = [field[i] for field, i in zip(fields.values(), pos)]
 
             dat = {}
             # assert len(self._field_vars) == len(ret)
@@ -393,11 +410,11 @@ class ChemType(abc.ABC):
         # if there is a maxbits set, do not iterate beyond it
         field_i = list(fields.values())[l_pos]
         bits = len(field_i)
-        # if field_i.inv:
-        #     bits = field_i.maxbits
+        if field_i.inv:
+            bits = field_i.maxbits
         for i in range(bits):
             pos[-1] = i
-            # print("querying", i)
+            # print("querying", i, "of pos", len(pos), pos)
             yield from self._recurse_fields(fields, pos=pos.copy())
 
     def _iter_fields(self):
@@ -411,8 +428,6 @@ class ChemType(abc.ABC):
             if field.any() and not field.all():
                 fields[real_name] = field
                 inverse[real_name] = field.inv
-
-        # fields = [getattr(self, field) for field in self._fields]
 
         vals = []
 
@@ -489,7 +504,7 @@ class ChemType(abc.ABC):
         try:
             cls = self.__class__()
         except Exception as e:
-            breakpoint()
+            # breakpoint()
             pass
 
         for field in self._fields:
@@ -499,9 +514,37 @@ class ChemType(abc.ABC):
         return cls
 
     @classmethod
+    def from_dict(cls, data):
+        cls = cls()
+        for name in data:
+            setattr(cls, cls._field_map[name], data[name])
+        cls._field_vars = list(data)
+        cls._fields = [cls._field_map[i] for i in data]
+
+        return cls
+
+    @classmethod
     def from_string(cls, string, sorted=False):
         """"""
         return cls.parse_string(string)
+
+    @classmethod
+    def from_smarts(cls, string, sorted=False):
+        """"""
+        return cls.parse_string(string)
+
+    def _to_primitives(self):
+        terms = [
+            self.__class__.from_dict({k: BitVec(v) for k, v in zip(self._field_vars, x)})
+            for x in self._recurse_fields(
+                {
+                    name: getattr(self, field)
+                    for name, field in zip(self._field_vars, self._fields)
+                },
+                pos=[],
+            )
+        ]
+        return terms
 
     def _flip(self, bit: str, inv: bool) -> str:
         ret = bit
@@ -613,39 +656,68 @@ class ChemType(abc.ABC):
 
         self._check_sane_compare(o)
 
-        ret = []
-        for field_a, field_b in zip(self._fields, o._fields):
-            a_vec = getattr(self, field_a)
-            b_vec = getattr(o, field_b)
-            ret.append(a_vec & b_vec)
+        ret = {}
+        all_names = set(self._field_vars + o._field_vars)
+        for name_a, field_a in zip(self._field_vars, self._fields):
+            for name_b, field_b in zip(o._field_vars, o._fields):
+                if name_a == name_b:
+                    a_vec = getattr(self, field_a)
+                    b_vec = getattr(o, field_b)
+                    ret[name_a] = a_vec & b_vec
+                    all_names.remove(name_a)
+                    break
+        for name in all_names:
+            ret[name] = BitVec()
 
-        return self.from_data(*ret)
+        return self.from_dict(ret)
 
     def __or__(self, o):
         # bitwise or (union)
 
         self._check_sane_compare(o)
 
-        ret = []
-        for field_a, field_b in zip(self._fields, o._fields):
-            a_vec = getattr(self, field_a)
-            b_vec = getattr(o, field_b)
-            ret.append(a_vec | b_vec)
+        ret = {}
+        for name_a, field_a in zip(self._field_vars, self._fields):
+            for name_b, field_b in zip(o._field_vars, o._fields):
+                if name_a == name_b:
+                    a_vec = getattr(self, field_a)
+                    b_vec = getattr(o, field_b)
+                    ret[name_a] = a_vec | b_vec
+                    break
+            if name_a not in ret:
+                a_vec = getattr(self, field_a)
+                ret[name_a] = a_vec
 
-        return self.from_data(*ret)
+        for name_b, field_b in zip(o._field_vars, o._fields):
+            if name_b not in ret:
+                b_vec = getattr(o, field_b)
+                ret[name_b] = b_vec
+
+        return self.from_dict(ret)
 
     def __xor__(self, o):
         # bitwise xor
 
         self._check_sane_compare(o)
 
-        ret = []
-        for field_a, field_b in zip(self._fields, o._fields):
-            a_vec = getattr(self, field_a)
-            b_vec = getattr(o, field_b)
-            ret.append(a_vec ^ b_vec)
+        ret = {}
+        for name_a, field_a in zip(self._field_vars, self._fields):
+            for name_b, field_b in zip(o._field_vars, o._fields):
+                if name_a == name_b:
+                    a_vec = getattr(self, field_a)
+                    b_vec = getattr(o, field_b)
+                    ret[name_a] = a_vec ^ b_vec
+                    break
+            if name_a not in ret:
+                a_vec = getattr(self, field_a)
+                ret[name_a] = a_vec
 
-        return self.from_data(*ret)
+        for name_b, field_b in zip(o._field_vars, o._fields):
+            if name_b not in ret:
+                b_vec = getattr(o, field_b)
+                ret[name_b] = b_vec
+
+        return self.from_dict(ret)
 
     def __invert__(self):
         # negation (not a)
@@ -684,7 +756,7 @@ class ChemType(abc.ABC):
 
         # now that we have an align function, try to do the normal thing
 
-        pairs = zip(self._fields, o._fields)
+        # pairs = zip(self._fields, o._fields)
 
         # this means o is not aligned with self, so we try to get a better
         # alignment by flipping it
@@ -692,13 +764,8 @@ class ChemType(abc.ABC):
         #     # TODO get this working for impropers
         #     pairs = zip(self._fields, o._fields[::-1])
 
-        ret = []
-        for field_a, field_b in pairs:
-            a_vec = getattr(self, field_a)
-            b_vec = getattr(o, field_b)
-            ret.append(a_vec & (a_vec ^ b_vec))
-
-        return self.from_data(*ret)
+        ans = self ^ o
+        return self & ans
 
     def __contains__(self, o):
         self._check_sane_compare(o)
@@ -719,12 +786,6 @@ class ChemType(abc.ABC):
                     return False
         return ret
 
-        return all(
-            [
-                (x ^ self.inv or ((x ^ self.inv) and (y ^ o.inv)))
-                for x, y, in it.zip_longest(self, o, fillvalue=self.inv)
-            ]
-        )
         # return (self - o).reduce() > 0
 
     def __hash__(self):
@@ -764,6 +825,15 @@ class ChemType(abc.ABC):
 class AtomType(ChemType):
     """"""
 
+    _field_map = {
+        "S": "_symbol",
+        "H": "_H",
+        "X": "_X",
+        "x": "_x",
+        "r": "_r",
+        "aA": "_aA",
+    }
+
     def __init__(
         self,
         symbol: BitVec = None,
@@ -778,7 +848,7 @@ class AtomType(ChemType):
 
         self._field_vars = ["S", "H", "X", "x", "r", "aA"]
         self._fields = ["_symbol", "_H", "_X", "_x", "_r", "_aA"]
-        # these are string bitfields, "" means Null
+
         if symbol is None:
             symbol = BitVec()
         self._symbol = symbol
@@ -803,6 +873,10 @@ class AtomType(ChemType):
             aA = BitVec()
         self._aA = aA
 
+        if HYDROGEN_ONE_BIT and symbol is not None and symbol[1] and symbol.bits() == 1:
+            self._field_vars = ["S"]
+            self._fields = ["_symbol"]
+
         super().__init__(inv=inv)
 
     @classmethod
@@ -818,68 +892,79 @@ class AtomType(ChemType):
     ):
         """"""
 
+        return cls(symbol=symbol, X=X, H=H, x=x, r=r, aA=aA, inv=inv)
+
+    @classmethod
+    def from_dict(cls, data):
         cls = cls()
-        cls._symbol = symbol
-        cls._H = H
-        cls._X = X
-        cls._x = x
-        cls._r = r
-        cls._aA = aA
+        for name in data:
+            bv = data[name]
+            setattr(cls, cls._field_map[name], bv)
+        cls._field_vars = list(data)
+        cls._fields = [cls._field_map[i] for i in data]
+
+        symbol = cls._symbol
+        if HYDROGEN_ONE_BIT and symbol is not None and symbol[1] and symbol.bits() == 1:
+            cls._field_vars = ["S"]
+            cls._fields = ["_symbol"]
+
         return cls
 
     @classmethod
     def from_ints(cls, data, inv: bool = False):
         """"""
 
+        """
+        None means null (0)
+        inf means all (~0)
+        -1 means not first bit on (~1)
+        """
+
         cls = cls()
 
-        vec = BitVec()
-        i = data.get("S", False)
-        if i == False:
-            vec.inv = True
-        else:
-            vec[i] = True
-        cls._symbol = vec.copy()
+        for name, field in zip(cls._field_vars, cls._fields):
+            v = data.get(name, None)
+            setattr(cls, field, BitVec(v, inv=v < 0))
 
-        vec = BitVec()
-        i = data.get("X", False)
-        if i == False:
-            vec.inv = True
-        else:
-            vec[i] = True
-        cls._X = vec.copy()
+        # vec = BitVec()
+        # i = data.get("X", False)
+        # if i == False:
+        #     vec.inv = True
+        # else:
+        #     vec[i] = True
+        # cls._X = vec.copy()
 
-        vec = BitVec()
-        i = data.get("x", False)
-        if i == False:
-            vec.inv = True
-        else:
-            vec[i] = True
-        cls._x = vec.copy()
+        # vec = BitVec()
+        # i = data.get("x", False)
+        # if i == False:
+        #     vec.inv = True
+        # else:
+        #     vec[i] = True
+        # cls._x = vec.copy()
 
-        vec = BitVec()
-        i = data.get("H", False)
-        if i == False:
-            vec.inv = True
-        else:
-            vec[i] = True
-        cls._H = vec.copy()
+        # vec = BitVec()
+        # i = data.get("H", False)
+        # if i == False:
+        #     vec.inv = True
+        # else:
+        #     vec[i] = True
+        # cls._H = vec.copy()
 
-        vec = BitVec()
-        i = data.get("r", False)
-        if i == False:
-            vec.inv = True
-        else:
-            vec[i] = True
-        cls._r = vec.copy()
+        # vec = BitVec()
+        # i = data.get("r", False)
+        # if i == False:
+        #     vec.inv = True
+        # else:
+        #     vec[i] = True
+        # cls._r = vec.copy()
 
-        vec = BitVec()
-        i = data.get("aA", False)
-        if i == False:
-            vec.inv = True
-        else:
-            vec[i] = True
-        cls._aA = vec.copy()
+        # vec = BitVec()
+        # i = data.get("aA", False)
+        # if i == False:
+        #     vec.inv = True
+        # else:
+        #     vec[i] = True
+        # cls._aA = vec.copy()
 
         return cls
 
@@ -899,6 +984,7 @@ class AtomType(ChemType):
         atoms = string[1:-1]
         atoms = string.split(",")
         self = AtomType()
+        group = None
         for atom in atoms:
 
             # these can be safely removed, since they are always impied??
@@ -989,29 +1075,41 @@ class AtomType(ChemType):
             elif unspecified_matches_all:
                 aA[:] = True
 
-            # sanitize: assume hydrogen is a single bonded atom
-            # if symbol[1] and not any(symbol[2:]):
-            #     H[0] = True
-            #     H[1:] = False
+            # # sanitize: assume hydrogen is a single bonded atom
+            if HYDROGEN_ONE_BIT and symbol[1] and symbol.bits() == 1:
+                H.clear()
+                # H[0] = True
+                # H[1:] = False
 
-            #     X[0] = False
-            #     X[2:] = False
+                H.clear()
+                # X[0] = False
+                # X[2:] = False
 
-            #     x[2:] = False
+                x.clear()
+                # x[2:] = False
 
-            #     r[1:] = False
+                r.clear()
+                # r[1:] = False
 
-            #     aA[:] = False
-            #     aA[0] = True
+                aA.clear()
+                # aA[:] = False
+                # aA[0] = True
 
-            self += self.from_data(symbol, H, X, x, r, aA)
+                obj = self.from_dict({"S": symbol})
+
+            else:
+                obj = self.from_data(symbol, H, X, x, r, aA)
+            if group is None:
+                group = obj
+            else:
+                group += obj
 
         ATOM_UNIVERSE += self
 
-        return self
+        return group
 
-    def __repr__(self):
-        return "Syms: {} H: {} X: {} x: {} r: {} aA: {}".format(
+    def compact_str(self):
+        return "{} {} {} {} {} {}".format(
             self._symbol, self._H, self._X, self._x, self._r, self._aA
         )
 
@@ -1114,29 +1212,21 @@ class AtomType(ChemType):
             smarts = ";".join(terms)
         else:
             smarts = "*"
-        if len(smarts) == 0:
-            breakpoint()
+        # if len(smarts) == 0:
+        #     breakpoint()
+        if self._symbol[1] and self._symbol.bits() == 1 and HYDROGEN_ONE_BIT:
+            smarts = "#1"
         return "[" + smarts + tag + "]"
 
-    def to_primitives(self, bond_limit=4):
+    def to_primitives(self):
         """
         Converts the representation to an enumeration of all possible
         primitive types that are valid.
         """
         if self.is_null():
             raise AtomTypeInvalidException("Does not define any primitive")
-        """
-        my order is S, H, X, r, aA
-        """
 
-        terms = [
-            AtomType.from_ints({k: v for k, v in zip(self._field_vars, x)})
-            for x in self._recurse_fields(
-                [getattr(self, field) for field in self._fields], pos=[]
-            )
-        ]
-
-        return terms
+        return self._to_primitives()
 
     def _is_valid(self) -> bool:
 
@@ -1161,158 +1251,10 @@ class AtomType(ChemType):
         # Everything else is acceptable?
         return not self.is_null()
 
-
-def next_bond_def(atom: AtomType, fix=None) -> AtomType:
-    """
-    Generate a +1 step in bond def, that will produce a valid atom
-    fix determines what cannot be changed in the operation
-    """
-    return atom.copy()
-
-
-def prev_bond_def(atom: AtomType, fix=None) -> AtomType:
-    """
-    Generate a +1 step in bond def, that will produce a valid atom
-    fix determines what cannot be changed in the operation
-    """
-    return atom.copy()
-
-    return True
-
-
-def iterate_atom_connections(
-    fix: dict = {}, init: dict = {}, direction=1, order=["S", "X", "r", "x", "H"]
-):
-    """
-    rules:
-    x + H <= X
-    if x == 0, r == 0
-    if X < 2, x == 0
-
-    # if x > 1, r == unbound # no constraint
-    if X >= 2 x == unbound # no constraint
-
-    """
-    # X = fix.get("X", 2)
-
-    # rmax = 8
-    # Sallowed = [1,6,7,8]
-
-    # rrange = [init.get("r", 0), rmax - init.get("r", 0)]
-    # xrange = [init.get("x", 0), X]
-    # Hrange = [init.get("H", 0), X]
-    # Xrange = [init.get("X", 0), X]
-
-    # Srange = [init.get("S", Sallowed[0]), Sallowed[-1]]
-    # # Srange = [s for s in range(Srange[0], Srange[1] + 1) if s in Sallowed]
-
-    # if direction == -1:
-    #     rrange = rrange[::-1]
-    #     xrange = xrange[::-1]
-    #     Hrange = Hrange[::-1]
-    #     Xrange = Xrange[::-1]
-    #     Srange = Srange[::-1]
-
-    # def next_S(S, X, r, x, H, direction=1, allowed=[1,6,7,8]):
-    #     S = S + 1 if direction > 0 else S - 1
-    #     if S > 0 and S in allowed:
-    #         yield S
-
-    # def next_X(S, X, r, x, H, direction=1, max_val=4):
-    #     X = X + 1 if direction > 0 else X - 1
-    #     if X > 0 and X <= max_val:
-    #         yield X
-
-    # def next_r(S, X, r, x, H, direction=1):
-    #     r = r + 1 if direction > 0 else r - 1
-    #     if x + H <= X and r > 0:
-    #         yield r
-
-    # def next_x(S, X, r, x, H, direction=1):
-    #     x = x + 1 if direction > 0 else x - 1
-    #     if not (x == 0 and r > 0) and x > 0:
-    #         yield x
-
-    # def next_H(S, X, r, x, H, direction=1):
-    #     H = H + 1 if direction > 0 else r - 1
-    #     if x + H <= X and H > 0:
-    #         yield H
-
-    # vars = []
-    # table = []
-    # for o in order:
-    #     success = False
-    #     if o == 'S':
-    #         vars.append(Srange)
-    #         table.append(next_S)
-    #     elif o == 'X':
-    #         vars.append(Xrange)
-    #         table.append(next_X)
-    #     elif o == 'r':
-    #         vars.append(rrange)
-    #         table.append(next_r)
-    #     elif o == 'x':
-    #         vars.append(Hrange)
-    #         table.append(next_x)
-    #     elif o == 'H':
-    #         vars.append(Hrange)
-    #         table.append(next_H)
-
-    # terms = []
-
-    # # vec = [next(fn(i)) for fn,x in zip(table, vars) for i in range(*x)]
-    # vec = [next(i) for var in vars for i in range(*var)]
-    # # make sure vec is valid
-
-    # terms.append(vec)
-    # for i,var in enumerate(vars):
-    #     vec[i] = table[i](var)
-    #     terms.append()
-    # return terms
-
-    X = fix.get("X", 2)
-
-    rmax = 8
-    Sallowed = [1, 6, 7, 8]
-
-    rrange = [init.get("r", 0), rmax - init.get("r", 0)]
-    xrange = [init.get("x", 0), X + 1]
-    Hrange = [init.get("H", 0), X + 1]
-    Xrange = [init.get("X", 0), X + 1]
-
-    Srange = [init.get("S", Sallowed[0]), Sallowed[-1]]
-    Srange = [s for s in range(Srange[0], Srange[1] + 1) if s in Sallowed]
-
-    if direction == -1:
-        rrange = rrange[::-1]
-        xrange = xrange[::-1]
-        Hrange = Hrange[::-1]
-        Xrange = Xrange[::-1]
-        Srange = Srange[::-1]
-
-    terms = []
-    for S in Srange:
-        for H in range(*Hrange, direction):
-            for x in range(*xrange, direction):
-                for r in range(*rrange, direction):
-
-                    if x + H > X:
-                        continue
-                    # if x == 0 and r > 0:
-                    #     continue
-                    if r == 1 or r == 2:
-                        continue
-
-                    rstr = "!r" if r == 0 else "r{}".format(r)
-                    term = "[#{}H{}X{}x{}{}a]".format(S, H, X, x, rstr)
-                    terms.append(term)
-                    term = "[#{}H{}X{}x{}{}A]".format(S, H, X, x, rstr)
-                    terms.append(term)
-    return terms
-
-
 class BondType(ChemType):
     """"""
+
+    _field_map = {"Order": "_order", "aA": "_aA"}
 
     def __init__(self, order: BitVec = None, aA: BitVec = None, inv: bool = False):
         """"""
@@ -1338,21 +1280,9 @@ class BondType(ChemType):
 
         cls = cls()
 
-        vec = BitVec()
-        i = data.get("Order", False)
-        if i == False:
-            vec.inv = True
-        else:
-            vec[i] = True
-        cls._order = vec.copy()
-
-        vec = BitVec()
-        i = data.get("aA", False)
-        if i == False:
-            vec.inv = True
-        else:
-            vec[i] = True
-        cls._aA = vec.copy()
+        for name, field in zip(cls._field_vars, cls._fields):
+            v = data.get(name, None)
+            setattr(cls, field, BitVec(v, inv=v < 0))
 
         return cls
 
@@ -1418,8 +1348,8 @@ class BondType(ChemType):
         BOND_UNIVERSE += self
         return self
 
-    def __repr__(self):
-        return "Order: {} aA: {}".format(self._order, self._aA)
+    def compact_str(self):
+        return "{} {}".format(self._order, self._aA)
 
     def bitwise_dispatch(self, order, aA, fn, inv=False):
         order = fn(self._order, order, inv)
@@ -1513,14 +1443,7 @@ class BondType(ChemType):
         my order is order;aromatic
         """
 
-        terms = [
-            BondType.from_ints({k: v for k, v in zip(self._field_vars, x)})
-            for x in self._recurse_fields(
-                [getattr(self, field) for field in self._fields], pos=[]
-            )
-        ]
-
-        return terms
+        return self._to_primitives()
 
 
 class ChemGraph(ChemType, abc.ABC):
@@ -1576,6 +1499,10 @@ class ChemGraph(ChemType, abc.ABC):
         return cls._split_string(string, sorted=sorted)
 
     @classmethod
+    def from_smarts(cls, string, sorted=False):
+        return cls.from_string(string, sorted=sorted)
+
+    @classmethod
     def _smirks_splitter(cls, smirks, atoms):
         import re
 
@@ -1605,9 +1532,16 @@ class ChemGraph(ChemType, abc.ABC):
                 a = getattr(self, field_a)
                 b = getattr(o, field_b)
             except AttributeError:
-                breakpoint()
+                # breakpoint()
                 raise ChemTypeComparisonException
             a._check_sane_compare(b)
+
+    def compact_str(self):
+        ret = ""
+        for field in self._fields:
+            obj = getattr(self, field)
+            ret += obj.compact_str()
+        return " ".join(ret.split())
 
     def __and__(self, o):
         # bitwise and (intersection)
@@ -1692,151 +1626,6 @@ class ChemGraph(ChemType, abc.ABC):
     # def __ne__(self, o):
     #     a, b = self.reduce_longest(o)
     #     return a != b
-
-import networkx
-class MoleculeGraph(networkx.Graph):
-    def __init__(self):
-        pass
-
-    @classmethod
-    def from_networkx(cls, graph):
-        pass
-
-    @classmethod
-    def from_string_list(cls, string_list, sorted=False):
-        atom1 = AtomType.from_string(string_list[0])
-        bond1 = BondType.from_string(string_list[1])
-        atom2 = AtomType.from_string(string_list[2])
-        if len(string_list) > 3:
-            raise NotImplementedError(
-                "The SMARTS pattern supplied has not been implemented"
-            )
-        return cls(atom1, bond1, atom2, sorted=sorted)
-
-    @classmethod
-    def _split_string(cls, string, sorted=False):
-        tokens = cls._smirks_splitter(string, atoms=2)
-        return cls.from_string_list(tokens, sorted=sorted)
-
-    def compiled_smarts(self):
-        """
-        take a list of bonds and try to produce the smallest smarts string possible
-        """
-        pass
-
-    def to_smarts(self, tag=True):
-
-        if tag:
-            return (
-                self._atom1.to_smarts(1)
-                + self._bond.to_smarts()
-                + self._atom2.to_smarts(2)
-            )
-        else:
-            return (
-                self._atom1.to_smarts()
-                + self._bond.to_smarts()
-                + self._atom2.to_smarts()
-            )
-
-    def drop(self, other):
-
-        graph = self.copy()
-        graph._atom1 = graph._atom1.drop(other._atom1)
-        graph._bond = graph._bond.drop(other._bond)
-
-        if type(other) == type(self):
-            graph._atom2 = graph._atom2.drop(other._atom2)
-
-        return graph
-
-    def _is_valid(self) -> bool:
-        return not self.is_null()
-
-    def is_primitive(self):
-
-        if super().is_null():
-            return False
-
-        if not super().is_primitive():
-            return False
-
-        return True
-
-        # Skipping these for now; do we want unbonded associations?
-        if self._atom1._X._v[0]:
-            return False
-
-        if self._atom2._X._v[0]:
-            return False
-
-        if self._atom1._H._v[0] and self._atom2._symbol._v[1]:
-            return False
-
-        if self._atom2._H._v[0] and self._atom1._symbol._v[1]:
-            return False
-
-        return True
-
-    def cluster(self, primitives=None):
-        if primitives is None:
-            primitives = self.to_primitives()
-
-        groups = {}
-        for prim in primitives:
-            a1, b, a2 = prim._atom1, prim._bond, prim._atom2
-            if a1 < a2:
-                a2, a1 = a1, a2
-            if a1 not in groups:
-                groups[a1] = []
-            groups[a1].extend([b, a2])
-
-        return groups
-
-    def to_primitives(self):
-        import tqdm
-
-        prims = []
-        for field in tqdm.tqdm(self._fields, total=len(self._fields), desc="types"):
-            obj = getattr(self, field)
-            prims.append(set(obj.to_primitives()))
-
-        ret = set()
-        for a1 in tqdm.tqdm(prims[0], total=len(prims[0]), desc="prims"):
-            for bnd in prims[1]:
-                for a2 in prims[2]:
-
-                    found = False
-                    for existing in ret:
-                        if existing._atom1 == a1:
-                            graph = BondGraph(a1, bnd, a2)
-                            found = True
-                            break
-                        elif existing._atom1 == a2:
-                            graph = BondGraph(a2, bnd, a1)
-                            found = True
-                            break
-                    if not found:
-                        if a2 > a1:
-                            graph = BondGraph(a2, bnd, a1)
-                        else:
-                            graph = BondGraph(a1, bnd, a2)
-
-                    if graph.is_primitive():
-                        ret.add(graph)
-
-        return list(ret)
-
-    def __repr__(self):
-        return (
-            "("
-            + self._atom1.__repr__()
-            + ") ["
-            + self._bond.__repr__()
-            + "] ("
-            + self._atom2.__repr__()
-            + ")"
-        )
 
 
 class BondGroup(ChemGraph):
@@ -1935,8 +1724,16 @@ class BondGroup(ChemGraph):
 
     @classmethod
     def primitive_sort(self, prims):
+        import tqdm
+
         ret = set()
-        for a1 in tqdm.tqdm(prims[0], total=len(prims[0]), desc="prims1", ncols=80):
+        for a1 in tqdm.tqdm(
+            prims[0],
+            total=len(prims[0]),
+            desc="prims1",
+            ncols=80,
+            disable=np.prod(list(map(len, prims))) < 10000,
+        ):
             for bnd in prims[1]:
                 for a2 in prims[0]:
 
@@ -1959,6 +1756,8 @@ class BondGroup(ChemGraph):
 
     def to_primitives(self):
 
+        import tqdm
+
         prims = []
 
         for field in tqdm.tqdm(
@@ -1968,7 +1767,13 @@ class BondGroup(ChemGraph):
             prims.append(set(obj.to_primitives()))
 
         ret = set()
-        for a1 in tqdm.tqdm(prims[0], total=len(prims[0]), desc="prims1", ncols=80):
+        for a1 in tqdm.tqdm(
+            prims[0],
+            total=len(prims[0]),
+            desc="prims1",
+            ncols=80,
+            disable=np.prod(list(map(len, prims))) < 10000,
+        ):
             for bnd in prims[1]:
                 for a2 in prims[0]:
 
@@ -2124,7 +1929,12 @@ class BondGraph(ChemGraph):
             prims.append(set(obj.to_primitives()))
 
         ret = set()
-        for a1 in tqdm.tqdm(prims[0], total=len(prims[0]), desc="prims"):
+        for a1 in tqdm.tqdm(
+            prims[0],
+            total=len(prims[0]),
+            desc="prims",
+            disable=np.prod(list(map(len, prims))) < 10000,
+        ):
             for bnd in prims[1]:
                 for a2 in prims[2]:
 
@@ -2346,6 +2156,58 @@ class AngleGraph(ChemGraph):
             + self._atom3.__repr__()
             + ")"
         )
+
+    def to_primitives(self):
+
+        import tqdm
+
+        prims = []
+
+        for field in tqdm.tqdm(
+            self._fields, total=len(self._fields), desc="types", disable=True
+        ):
+            obj = getattr(self, field)
+            prims.append(set(obj.to_primitives()))
+
+        ret = set()
+        for a1 in tqdm.tqdm(
+            prims[0],
+            total=len(prims[0]),
+            desc="prims1",
+            ncols=80,
+            disable=np.prod(list(map(len, prims))) < 10000,
+        ):
+            for bnd1 in prims[1]:
+                for a2 in prims[2]:
+                    for bnd2 in prims[3]:
+                        for a3 in prims[4]:
+                            graph = AngleGraph(a1, bnd1, a2, bnd2, a3)
+                            if graph.is_primitive() and all([graph != x for x in ret]):
+                                ret.add(graph)
+
+        return list(ret)
+
+        prims = []
+        for field in self._fields:
+            obj = getattr(self, field)
+            prims.append(set(obj.to_primitives()))
+
+        ret = set()
+
+        for a1 in prims[0]:
+            for bnd1 in prims[1]:
+                for a2 in prims[2]:
+                    for bnd2 in prims[3]:
+                        if bnd2 < bnd1:
+                            continue
+                        for a3 in prims[4]:
+                            if a3 < a1:
+                                continue
+                            prim = a1 + bnd1 + a2 + bnd2 + a3
+                            if AngleGraph.from_string(prim).is_primitive():
+                                ret.add(prim)
+
+        return list(ret)
 
     def is_primitive(self):
         """
@@ -2857,10 +2719,10 @@ class OutOfPlaneGraph(DihedralGraph):
         return (
             (0, 1, 2, 3, 4, 5, 6),
             (0, 1, 2, 5, 6, 3, 4),
-            (3, 4, 2, 0, 1, 5, 6),
-            (3, 4, 2, 5, 6, 0, 1),
-            (5, 6, 2, 0, 1, 3, 4),
-            (5, 6, 2, 3, 4, 0, 1),
+            (4, 3, 2, 1, 0, 5, 6),
+            (4, 3, 2, 5, 6, 1, 0),
+            (6, 5, 2, 1, 0, 3, 4),
+            (6, 5, 2, 3, 4, 1, 0),
         )
 
     def __contains__(self, o):
