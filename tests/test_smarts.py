@@ -57,6 +57,3 @@ def test_smarts():
     print(a - c, "good?", a & c == c, "contains?", c in a)
     print("b", b)
     print(b - c, "good?", b & c == c, "contains?", c in b)
-
-
-test_smarts()

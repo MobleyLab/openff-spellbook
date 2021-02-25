@@ -390,7 +390,9 @@ class ChemType(abc.ABC):
         if len(fields) == 0:
             return
         if len(pos) == len(fields):
-            ret = [field[i] for field, i in zip(fields.values(), pos)]
+            # we need to "double invert" and then save the inv flag
+            # this helps with generating smarts, so we get !H0 instead of H1,H2,H3, etc
+            ret = [field[i] ^ field.inv for field, i in zip(fields.values(), pos)]
 
             dat = {}
             # assert len(self._field_vars) == len(ret)
@@ -1398,6 +1400,8 @@ class BondType(ChemType):
                 if bond_val == 0:
                     continue
 
+                if bond_val > 4:
+                    continue
                 bond = bond_lookup[bond_val]
                 if inv:
                     bond = "!" + bond
