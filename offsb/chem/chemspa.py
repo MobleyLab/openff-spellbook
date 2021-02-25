@@ -1,15 +1,10 @@
 #!/usr/bin/env python
 
 import copy
-import functools
-import io
 import itertools
-import logging
 import os
-import pprint
 import re
 import sys
-import tempfile
 import pickle
 
 import numpy as np
@@ -113,45 +108,48 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                 payload=payload,
             )
 
-            self.ffname = ff_fname
+        self.ffname = ff_fname
 
-            self._prim_clusters = dict()
+        self._prim_clusters = dict()
 
-            # default try to make new types for these handlers
-            self.parameterize_handlers = [
-                "vdW",
-                "Bonds",
-                "Angles",
-                "ImproperTorsions",
-                "ProperTorsions",
-            ]
+        # default try to make new types for these handlers
+        self.parameterize_handlers = [
+            "vdW",
+            "Bonds",
+            "Angles",
+            "ImproperTorsions",
+            "ProperTorsions",
+        ]
 
-            self.bit_search_limit = 4
-            self.optimize_candidate_limit = 1
-            self.split_candidate_limit = None  # None to disable
-            self.score_candidate_limit = None  # None to disable
-            self.gradient_assigned_only = True
+        self.bit_search_limit = 4
+        self.optimize_candidate_limit = 1
+        self.split_candidate_limit = None  # None to disable
+        self.score_candidate_limit = None  # None to disable
+        self.gradient_assigned_only = True
 
-            # if we optimize each split, the split must fall below e.g -.1 (-10%)
-            self.split_keep_threshhold = -0.1
+        # if we optimize each split, the split must fall below e.g -.1 (-10%)
+        self.split_keep_threshhold = -0.1
 
-            # Calculate the theoretical best splits and rank scores
-            self.calculate_score_rank = False
+        # Calculate the theoretical best splits and rank scores
+        self.calculate_score_rank = False
 
-            self.score_mode = [
-                "min",
-                "max",
-                "abs_min",
-                "abs_max",
-                "single-point-gradient-max",
-            ]
+        self.score_mode = [
+            "min",
+            "max",
+            "abs_min",
+            "abs_max",
+            "single-point-gradient-max",
+        ]
 
-            self.split_mode = self.score_mode[3]
-            self.score_mode = self.score_mode[3]
+        self.split_mode = self.score_mode[3]
+        self.score_mode = self.score_mode[3]
 
-            self.trust0 = None
-            self.eig_lowerbound = None
-            self.finite_difference_h = None
+        self.trust0 = None
+        self.eig_lowerbound = None
+        self.finite_difference_h = None
+
+        self.atom_universe = offsb.chem.types.AtomType()
+        self.bond_universe = offsb.chem.types.BondType()
 
     def to_pickle(self, db=True, index=True, name=None):
         po, self._po = self._po, None
@@ -1824,6 +1822,7 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
         ]
 
         QCA = self._po.source.source
+        ciehms = "canonical_isomeric_explicit_hydrogen_mapped_smiles"
 
         print("\nPRINT OUT OF MOLECULE ASSIGNMENTS\n")
 
@@ -1838,7 +1837,11 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
             for lbl, param in self._labeler.db["ROOT"]["data"][ph.payload].items()
         }
 
+        n_entries = 0
         for entry in QCA.iter_entry():
+            n_entries += 1
+
+        for entry in enumerate(i, QCA.iter_entry()):
 
             labels = {
                 aidx: lbl
@@ -1847,6 +1850,17 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                     ph.payload
                 ].items()
             }
+            index_str = "{:6d}/{6d}".format(i, n_entries)
+            print(
+                "    ",
+                index_str,
+                entry.payload
+            )
+            print(
+                "        ",
+                index_str,
+                QCA.db[entry.payload]['data'].attributes[ciehms],
+            )
 
             # prims = self._prim[entry.payload]
 
@@ -1861,8 +1875,8 @@ class ChemicalSpace(offsb.treedi.tree.Tree):
                     smarts = "".join(self._to.db[entry.payload]["data"][aidx])
 
                 print(
-                    "    ",
-                    entry.payload,
+                    "        ",
+                    index_str,
                     aidx,
                     lbl,
                     params[lbl]["smirks"],
