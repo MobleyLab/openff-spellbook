@@ -20,6 +20,8 @@ from offsb.search.smiles import SmilesSearchTree
 from offsb.tools.util import flatten_list
 from offsb.treedi.tree import DEFAULT_DB, PartitionTree
 from openforcefield.topology import Molecule
+import offsb.api.tk
+
 
 
 class NotImplementedError:
@@ -38,6 +40,8 @@ class OpenForceFieldTreeBase(offsb.treedi.tree.TreeOperation, abc.ABC):
         self._select = "Entry"
 
         self._exception_on_unassigned = True
+
+        self._transformer = offsb.api.tk.ValenceDict
 
         if ff_kwargs is None:
             ff_kwargs = {}
@@ -375,6 +379,7 @@ class OpenForceFieldvdWTree(OpenForceFieldTreeBase):
 
         if not issubclass(type(source_tree), PartitionTree):
             partition = SmilesSearchTree("[*]", source_tree, self._key, verbose=False)
+            partition.valence = True
             partition.apply()
             source_tree = partition
 
@@ -405,6 +410,7 @@ class OpenForceFieldBondTree(OpenForceFieldTreeBase):
 
         if not issubclass(type(source_tree), PartitionTree):
             partition = SmilesSearchTree("[*]~[*]", source_tree, self._key, verbose=False)
+            partition.valence = True
             partition.apply()
             source_tree = partition
 
@@ -435,6 +441,7 @@ class OpenForceFieldAngleTree(OpenForceFieldTreeBase):
 
         if not issubclass(type(source_tree), PartitionTree):
             partition = SmilesSearchTree("[*]~[*]~[*]", source_tree, self._key, verbose=False)
+            partition.valence = True
             source_tree = partition
             partition.apply()
 
@@ -462,6 +469,7 @@ class OpenForceFieldTorsionTree(OpenForceFieldTreeBase):
 
         if not issubclass(type(source_tree), PartitionTree):
             partition = SmilesSearchTree("[*]~[*]~[*]~[*]", source_tree, self._key, verbose=False)
+            partition.valence = True
             partition.apply()
             source_tree = partition
 
@@ -505,6 +513,7 @@ class OpenForceFieldImproperTorsionTree(OpenForceFieldTreeBase):
 
         if not issubclass(type(source_tree), PartitionTree):
             partition = SmilesSearchTree("[*]~[*](~[*])~[*]", source_tree, self._key, verbose=False)
+            partition.valence = True
             partition.apply()
             source_tree = partition
 

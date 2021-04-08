@@ -51,6 +51,9 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
 
         self._select = "Molecule"
 
+        if os.path.exists("optimize.in"):
+            os.remove("optimize.in")
+
         if init is None:
             self._setup = ForceBalanceObjectiveOptGeoSetup(
                 fbinput_fname,
@@ -260,7 +263,6 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         if xk is not None:
             optimizer.FF.make(xk, printdir=optimizer.resdir)
 
-
         self.X = 0
 
         QCA = self.source.source
@@ -270,6 +272,9 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
         for x in self._forcefield.plist:
             label_names.append(x.split("/"))
 
+        labeler = offsb.ui.qcasb.QCArchiveSpellBook.from_QCATree(
+            QCA
+        ).assign_labels_from_openff(self.ff_fname, "labeler")
 
         for tgt, dat in self._objective.ObjDict.items():
             rec = tgt.split(".")[-1]
@@ -286,7 +291,9 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
                 continue
 
             try:
-                proc = [x for x in QCA.node_iter_depth_first(QCA.root()) if x.payload == rec][0]
+                proc = [
+                    x for x in QCA.node_iter_depth_first(QCA.root()) if x.payload == rec
+                ][0]
             except Exception:
                 breakpoint()
                 print("Issue with this one")
@@ -297,7 +304,7 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
                 print("Issue with this one")
 
             # This will be the parameters that we are fitting
-            labels = self._setup.labeler.db[entry.payload]['data']
+            labels = labeler.db[entry.payload]["data"]
 
             self.X += dat["w"] * dat["x"]
 
@@ -340,15 +347,12 @@ class ForceBalanceObjectiveOptGeo(offsb.treedi.tree.TreeOperation):
                         print("ERROR")
 
                     ic_type, ic_fn = off_ic_to_fb[ph]
-                    
-                    n_lbl = sum(
-                        [1 for x in labels[ph].values() if x == lbl]
-                    )
+
+                    n_lbl = sum([1 for x in labels[ph].values() if x == lbl])
                     n_ic += n_lbl
-                    
 
                     # This is the assumption that all gradient info comes from
-                    # the labeled ICs, and the other ICs do not affect the 
+                    # the labeled ICs, and the other ICs do not affect the
                     # gradient. Not the best, but I think it is better than
                     # spreading it out to all ICs
                     for indices, ic_lbl in labels[ph].items():
@@ -957,9 +961,11 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
         self.restrain_k = 0.0
 
         self._bond_denom = 0.05
-        self._angle_denom = 8
-        self._dihedral_denom = 0
-        self._improper_denom = 20
+        self._angle_denom = 8.
+        self._dihedral_denom = 20.
+        self._improper_denom = 20.
+
+        self.weight_limit = 1e-7
 
         self.source = DummyTree
         DummyTree.source = source_tree
@@ -1415,6 +1421,7 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
             ret_obj[mol_id] = {"data": {}}
             if kwargs["geometry"]:
                 ret_obj[mol_id]["data"]["geometry"] = {
+                    "enable": og_weight > self.weight_limit,
                     "dir": "OG." + dir,
                     "pdb": pdb_str,
                     "sdf": mol2_str,
@@ -1431,6 +1438,7 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
                 }
             if kwargs["energy"]:
                 ret_obj[mol_id]["data"]["energy"] = {
+                    "enable": True,
                     "dir": "AI." + dir.split(".")[0],
                     "pdb": pdb_str,
                     "sdf": mol2_str,
@@ -1442,6 +1450,7 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
                 }
             if kwargs["vibration"] and has_hess_i:
                 ret_obj[mol_id]["data"]["vibration"] = {
+                    "enable": True,
                     "dir": "VF." + dir,
                     "pdb": pdb_str,
                     "sdf": mol2_str,
@@ -1451,6 +1460,7 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
             if kwargs["torsiondrive"]:
                 td_dir = kwargs["td_dir"]
                 ret_obj[mol_id]["data"]["torsiondrive"] = {
+                    "enable": True,
                     "dir": td_dir,
                     "pdb": pdb_str,
                     "sdf": mol2_str,
@@ -1485,7 +1495,7 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
         rdkit_logger = logging.getLogger("rdkit")
         rdkit_logger.setLevel(lvl)
 
-        for folder in ["optimize.tmp", "optimize.bak", "result"]:
+        for folder in ["optimize.tmp", "optimize.bak", "result", "targets"]:
             try:
                 shutil.rmtree(folder)
             except FileNotFoundError:
@@ -1590,7 +1600,13 @@ class ForceBalanceObjectiveOptGeoSetup(offsb.treedi.tree.TreeOperation):
                         opts = config.get("global")
                         if opts is not None:
                             if opts not in targets:
-                                fout.write(opts)
+
+                                if config["enable"]:
+                                    fout.write(opts)
+                                else:
+                                    fout.write("\n# Disabled")
+                                    fout.write(opts.replace("\n", "\n# ") + "\n")
+
                                 targets.append(opts)
 
 

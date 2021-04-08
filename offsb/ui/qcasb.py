@@ -1,12 +1,11 @@
+import copy
 import json
 import os
 import pickle
 import sys
 import traceback
-import copy
 
 import numpy as np
-
 import offsb
 import offsb.qcarchive.qcatree as qca
 import offsb.rdutil
@@ -23,6 +22,7 @@ def load_dataset_input(fnm):
         if not line.lstrip().startswith("#")
     ]
     return datasets
+
 
 class QCArchiveSpellBook:
 
@@ -61,7 +61,7 @@ class QCArchiveSpellBook:
             print(e)
             print("Continuing with verify=False...")
             client = ptl.FractalClient(verify=False)
-            
+
         if self.QCA is None:
             self.QCA = qca.QCATree(
                 "QCA", root_payload=client, node_index=dict(), db=dict()
@@ -138,7 +138,7 @@ class QCArchiveSpellBook:
             if datasets is not None:
                 aux_sets = datasets
                 load_all = False
-            # aux_sets = self.openff_qcarchive_datasets_bad_name
+                # aux_sets = self.openff_qcarchive_datasets_bad_name
 
                 self.drop = drop
                 self.load(aux_sets, load_all=load_all, start=start, limit=limit)
@@ -253,8 +253,8 @@ class QCArchiveSpellBook:
 
     def plot_torsiondrive_groupby_openff_param(self, infile, oldparamfile=None):
 
-        import matplotlib.pyplot as plt
         import matplotlib as mpl
+        import matplotlib.pyplot as plt
 
         # TODO: make the fancier multirow plots
         rows = 1
@@ -440,9 +440,9 @@ class QCArchiveSpellBook:
             Save as file (plot using something else)
         """
 
-        import offsb.search.smiles
-        import offsb.op.openmm
         import offsb.op.geometry
+        import offsb.op.openmm
+        import offsb.search.smiles
 
         valence_types = {
             "n": "vdW",
@@ -1191,7 +1191,13 @@ class QCArchiveSpellBook:
         ext = ".offxml"
         if not openff_name.endswith(ext):
             openff_name += ext
-        labeler = OP(self.QCA, name, openff_name, ff_kwargs=dict(allow_cosmetic_attributes=True), verbose=self.verbose)
+        labeler = OP(
+            self.QCA,
+            name,
+            openff_name,
+            ff_kwargs=dict(allow_cosmetic_attributes=True),
+            verbose=self.verbose,
+        )
         labeler.apply(targets=targets)
         labeler.to_pickle()
         return labeler
@@ -1201,7 +1207,6 @@ class QCArchiveSpellBook:
 
         # if os.path.exists(name + ".p"):
         #     return pickle.load(open(name + ".p", "rb"))
-
         # assume we want all final geometries
         if (
             len(
@@ -1212,6 +1217,7 @@ class QCArchiveSpellBook:
             self.QCA.cache_optimization_minimum_molecules(targets)
 
         query = SmilesSearchTree(smi, self.QCA, "query")
+        query.valence = True
         query.apply(targets=targets)
 
         op = op_cls(query, name)
@@ -1220,8 +1226,10 @@ class QCArchiveSpellBook:
         # op.to_pickle()
         return op
 
-    def measure_internal_coordinates(self, targets=None):
-        from offsb.op.geometry import BondOperation, AngleOperation, TorsionOperation, ImproperTorsionOperation
+    def measure_internal_coordinates(self, targets=None, ignore=None):
+        from offsb.op.geometry import (AngleOperation, BondOperation,
+                                       ImproperTorsionOperation,
+                                       TorsionOperation)
         from offsb.search.smiles import SmilesSearchTree
 
         smi_list = {
@@ -1235,9 +1243,14 @@ class QCArchiveSpellBook:
             "Bonds": BondOperation,
             "Angles": AngleOperation,
             "ProperTorsions": TorsionOperation,
-            "ImproperTorsions": ImproperTorsionOperation
+            "ImproperTorsions": ImproperTorsionOperation,
         }
+        if ignore:
+            op_list = {k: v for k, v in op_list.items() if k not in ignore}
+            smi_list = {k: v for k, v in smi_list.items() if k not in ignore}
+
         query = SmilesSearchTree(list(smi_list.values()), self.QCA, "query")
+        query.valence = True
         query.apply(targets=targets)
 
         ret = {}
@@ -1245,19 +1258,18 @@ class QCArchiveSpellBook:
         for name, op_fn in op_list.items():
             op_query = copy.deepcopy(query)
             for entry, val in op_query.db.items():
-                val = val['data']
+                val = val["data"]
                 for smi in list(val):
                     if smi != smi_list[name]:
                         val.pop(smi)
 
             op = op_fn(op_query, name)
             op.processes = 1
-            op.verbose=True
+            op.verbose = True
             op.apply(targets=targets)
             ret[name] = op
 
         return ret
-
 
     def measure_bonds(self, name, targets=None):
         from offsb.op.geometry import BondOperation as OP
@@ -1286,9 +1298,12 @@ class QCArchiveSpellBook:
             fname = out_fnm
             fid = open(fname, "w")
         QCA = self.QCA
-        QCA.cache_initial_molecules(select="Entry")
-        QCA.cache_initial_molecules(select="TorsionDrive")
-        QCA.cache_initial_molecules(select="Optimization")
+        x = QCA.cache_initial_molecules(select="Entry")
+        print(f"Retrieved {x} entry initial mols")
+        x = QCA.cache_initial_molecules(select="TorsionDrive")
+        print(f"Retrieved {x} torsiondrive initial mols")
+        x = QCA.cache_initial_molecules(select="Optimization")
+        print(f"Retrieved {x} optimization initial mols")
 
         error_list = []
         for ds_id in QCA.root().children:
@@ -1447,10 +1462,7 @@ class QCArchiveSpellBook:
                                                 + "."
                                                 + traj[-1].payload
                                             )
-                                            fname = (
-                                                error_name
-                                                + ".xyz"
-                                            )
+                                            fname = error_name + ".xyz"
                                             # print("Trajectory found... saving", fname)
                                             mol = QCA.db[traj[-1].payload]["data"]
                                             with open(fname, "w") as xyzfid:
@@ -1476,14 +1488,15 @@ class QCArchiveSpellBook:
                                                 + "."
                                                 + mol_id
                                             )
-                                            fname = (
-                                                error_name
-                                                + ".xyz"
-                                            )
+                                            fname = error_name + ".xyz"
                                             # print("Trajectory not found... saving input molecule", fname)
                                             mol = QCA.db[mol_id]["data"]
                                             if type(mol) == dict:
-                                                raise Exception("Mol {} is a dictionary (Procedure index {})".format(mol_id, node.index))
+                                                raise Exception(
+                                                    "Mol {} is a dictionary (Procedure index {}):".format(
+                                                        mol_id, node.index, mol
+                                                    )
+                                                )
                                             if (
                                                 "geometry" in mol.dict()
                                                 and "symbols" in mol.dict()
@@ -1559,7 +1572,7 @@ class QCArchiveSpellBook:
                                 fid.write(err_str)
 
         if len(error_list) > 0:
-            fid.write("The following calculations failed:")
+            fid.write("The following calculations failed:\n")
             for error in error_list:
                 fid.write("{:s}\n".format(error))
         fid.write("____Done____\n")
@@ -1595,8 +1608,8 @@ class QCArchiveSpellBook:
     ):
 
         import offsb.chem.chemspa
-        import offsb.op.forcebalance
         import offsb.op.chemper
+        import offsb.op.forcebalance
 
         chemspa = self._generate_chemical_space_obj(ff_fname, clear_existing)
         forcebalance = offsb.op.forcebalance.ForceBalanceObjectiveOptGeo(

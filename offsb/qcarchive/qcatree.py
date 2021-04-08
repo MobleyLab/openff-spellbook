@@ -62,7 +62,7 @@ def wrap_fn_hessian(fn, i, j, **kwargs):
 
 class QCAFilter:
 
-    __slots__ = ["types", "smarts", "entries", "records", "datasets"]
+    __slots__ = ["types", "smarts", "entries", "records", "datasets", "payloads"]
 
     def __init__(self):
 
@@ -71,9 +71,14 @@ class QCAFilter:
         self.entries = []
         self.records = []
         self.datasets = []
+        self.payloads = []
 
     @classmethod
     def from_file(cls, fnm):
+
+        # the file can have the same key multiple times, e.g.
+        # payloads x
+        # payloads y
         obj = cls()
         with open(fnm) as f:
             for line in f:
@@ -219,7 +224,15 @@ class QCATree(Tree.Tree):
         pl = {"data": ds}
         self.db[ds_id] = pl
 
+        if drop is not None:
+            self.drop = drop
+        else:
+            self.drop = QCAFilter()
+
         # create the index node for the tree and integrate it
+        if ds_id in self.drop.payloads:
+            return
+
         ds_node = Node.Node(name=ds.data.name, payload=ds_id)
         ds_node = self.add(self.root_index, ds_node)
 
@@ -304,6 +317,8 @@ class QCATree(Tree.Tree):
             eobj = self.db[entry.payload]["data"].__dict__
             if "initial_molecule" in eobj:
                 init_mol_id = eobj["initial_molecule"]
+                if type(init_mol_id) is str:
+                    init_mol_id = [init_mol_id]
             elif "initial_molecules" in eobj:
                 init_mol_id = list(eobj["initial_molecules"])
 
@@ -815,12 +830,12 @@ class QCATree(Tree.Tree):
         ds_specs = ds.data.specs
         records = ds.data.records.copy()
 
-        if len(self.drop.entries):
+        if self.drop.entries or self.drop.payloads:
 
             filter = [
                 rec
                 for rec, entry in records.items()
-                if entry.name in self.drop.entries
+                if entry.name in self.drop.entries or "QCE." + ds.data.id + "-" + str(rec) in self.drop.payloads
             ]
             print("Entry name filter removing {:d} entries from ds {:s}:".format(len(filter), name))
             for entry_name in filter:
@@ -929,10 +944,12 @@ class QCATree(Tree.Tree):
 
             pl_name = "QCE." + ds.data.id + "-" + str(rec)
             if pl_name in self.db:
-                if record.name == self.db[pl_name]["data"].name:
+                if record.name == self.db[pl_name]["data"].name or pl_name in self.drop.payloads:
                     # Not sure why, but this Entry was already added.
                     # Just assume we can skip it.
                     continue
+            if pl_name in self.drop.payloads:
+                continue
             node = Node.Node(name="Entry", payload=pl_name)
             node = self.add(ds_node.index, node)
             self.db[pl_name] = DEFAULT_DB({"data": record})
@@ -942,6 +959,8 @@ class QCATree(Tree.Tree):
                 return
             for spec, procedures in spec_map_ids.items():
                 pl_name = "QCS-" + str(spec)
+                if pl_name in self.drop.payloads:
+                    continue
                 spec_node = Node.Node(name="Specification", payload=pl_name)
                 spec_node = self.add(node.index, spec_node)
                 # self[pl_name] = DEFAULT_DB({"data": ds_specs[spec.lower()]})
@@ -1095,6 +1114,8 @@ class QCATree(Tree.Tree):
                     # step = scan.steps[val[0]]
 
                 index = "QCP-" + opts
+                if index in self.drop.payloads:
+                    continue
 
                 # skip if filtered from above
                 obj = opt_map.get(index)
@@ -1103,6 +1124,8 @@ class QCATree(Tree.Tree):
 
                 pl = (scan.get("type")[:], tuple(scan.get("indices")), step)
                 # pl = (scan.type[:], tuple(scan.indices), step)
+                if pl in self.drop.payloads:
+                    continue
                 constraint_node = Node.Node(payload=pl, name="Constraint")
                 constraint_node = self.add(node.index, constraint_node)
 
@@ -1179,6 +1202,8 @@ class QCATree(Tree.Tree):
                 # val = eval(constraint)
 
                 pl = ("dihedral", indices, eval(constraint)[0])
+                if pl in self.drop.payloads:
+                    continue
                 constraint_node = Node.Node(payload=pl, name="Constraint")
                 constraint_node = self.add(node.index, constraint_node)
                 self.register_modified(constraint_node, state=Node.CLEAN)
@@ -1192,6 +1217,8 @@ class QCATree(Tree.Tree):
                         self.logger.warn(
                             "A TD optimization was filtered! ID {}".format(index)
                         )
+                        continue
+                    if index in self.drop.payloads:
                         continue
                     opt_node = Node.Node(name="Optimization", payload=index)
                     opt_nodes.append(opt_node)
@@ -1288,6 +1315,8 @@ class QCATree(Tree.Tree):
                 for index in traj:
                     index = suf + index
                     name = "GradientStub" if skel else "Gradient"
+                    if index in self.drop.payloads:
+                        continue
                     result_node = Node.Node(name=name, payload=index)
                     result_nodes.append(result_node)
                     result_node = self.add(node.index, result_node)
@@ -1296,6 +1325,10 @@ class QCATree(Tree.Tree):
                     self.register_modified(result_node, state=Node.CLEAN)
             else:
                 print("No gradient information for", node, ": Not complete?")
+
+        if len(nodes) == 0:
+            print("No data")
+            return 
 
         data = [completes, len(nodes), completes / len(nodes) * 100.0]
         print("Completes:   {:8d}/{:8d} ({:6.2f}%)".format(*data))
@@ -1393,6 +1426,8 @@ class QCATree(Tree.Tree):
                     state = "NEW"
                     pl = DEFAULT_DB({"data": DEFAULT_DB({"id": index})})
 
+                if index in self.drop.payloads:
+                    continue
                 mol_node = Node.Node(name=name, payload=index)
                 mol_node.state = state
                 mol_node = self.add(node.index, mol_node)

@@ -2,10 +2,12 @@ import logging
 from abc import ABC, abstractmethod
 
 import numpy as np
-
 import offsb.rdutil.mol
 import offsb.treedi.tree
 from offsb.tools.util import flatten_list
+
+from openforcefield.typing.engines.smirnoff.parameters import (ImproperDict,
+                                                               ValenceDict)
 
 
 class GeometryOperation(offsb.treedi.tree.TreeOperation, ABC):
@@ -82,6 +84,7 @@ class GeometryOperation(offsb.treedi.tree.TreeOperation, ABC):
             "op": self.op,
             "entry": entry_name,
             "atoms": self._atoms,
+            "transform": self.key_transform,
         }
 
     @staticmethod
@@ -96,6 +99,7 @@ class GeometryOperation(offsb.treedi.tree.TreeOperation, ABC):
         entry = kwargs["entry"]
         atoms = kwargs["atoms"]
         map_idx = kwargs["map_idx"]
+        transform = kwargs["transform"]
 
         ret = {}
         calcs = 0
@@ -108,6 +112,7 @@ class GeometryOperation(offsb.treedi.tree.TreeOperation, ABC):
 
             if map_idx is not None:
                 mask_mapped = tuple([map_idx[i] - 1 for i in mask])
+                mask_mapped = transform(mask_mapped)
             # mask = [i-1 for i in mask]
             debug_str += "Measuring {} on entry {} molecule {}\n".format(
                 str(mask), entry, target.payload
@@ -118,10 +123,12 @@ class GeometryOperation(offsb.treedi.tree.TreeOperation, ABC):
                 calcs += 1
             except Exception as e:
                 import traceback
+
                 out_str += "Calculation failed for " + str(target) + "\n"
                 out_str += traceback.format_exc() + "\n"
                 out_str += "Error:\n" + str(e) + "\n"
 
+            mask = transform(mask)
             ret[tuple(mask)] = vals
             debug_str += "value for {}: {}\n".format(str(mask), vals)
 
@@ -137,6 +144,10 @@ class AngleOperation(GeometryOperation):
     def __init__(self, source, name, verbose=False):
         super().__init__(source, name, verbose=verbose)
         self._atoms = 3
+
+    @staticmethod
+    def key_transform(key):
+        return ValenceDict.key_transform(key)
 
     @staticmethod
     def measure(mol, idx):
@@ -163,6 +174,10 @@ class BondOperation(GeometryOperation):
         self._atoms = 2
 
     @staticmethod
+    def key_transform(key):
+        return ValenceDict.key_transform(key)
+
+    @staticmethod
     def measure(mol, idx):
         """calculates distance from first atom to remaining atoms"""
         atoms = mol[np.newaxis, :, :]
@@ -177,6 +192,10 @@ class TorsionOperation(GeometryOperation):
     def __init__(self, source, name):
         super().__init__(source, name)
         self._atoms = 4
+
+    @staticmethod
+    def key_transform(key):
+        return ValenceDict.key_transform(key)
 
     @staticmethod
     def measure(mol, idx):
@@ -316,6 +335,10 @@ class ImproperTorsionOperation(GeometryOperation):
     def __init__(self, source, name, verbose=False):
         super().__init__(source, name)
         self._atoms = 4
+
+    @staticmethod
+    def key_transform(key):
+        return ImproperDict.key_transform(key)
 
     @staticmethod
     def measure(mol, idx):

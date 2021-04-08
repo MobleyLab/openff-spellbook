@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
+import re
+
+import offsb.chem.types
+import offsb.op.geometry
 import offsb.treedi
 import offsb.treedi.tree
-import offsb.op.geometry
-import re
+
 from chemper.smirksify import SMIRKSifier
-import offsb.chem.types
 
 
 class ChemperOperation(offsb.treedi.tree.TreeOperation):
-    """ Given a set of indices, find the SMARTS representation
-
-    """
+    """Given a set of indices, find the SMARTS representation"""
 
     _LABEL_TYPES = {
         "Bonds": 2,
@@ -32,13 +32,33 @@ class ChemperOperation(offsb.treedi.tree.TreeOperation):
     def __init__(self, source, name):
         super().__init__(source, name)
         self._select = "Entry"
-        self.processes = None
+        self._processes = None
         self.chembit = False
+        self.chemgraph = False
+
+        self.chemgraph_distinguish_hydrogen = True  # likely needed for vdW?
+        self.chemgraph_explicit_hydrogen = False
+
+        self.chemgraph_depth_limit = None
+        self.chemgraph_min_depth = 0
+
+        self.openff_compat = True
+
+    @property
+    def processes(self):
+        return self._processes
+
+    @processes.setter
+    def processes(self, n):
+
+        if n is None:
+            self._processes = n
+        else:
+            self._processes = int(n)
 
     @staticmethod
     def _smirks_splitter(smirks, atoms=2):
-        """
-        """
+        """"""
 
         atom = r"\[([^[.]*):[0-9]*\]"
         bond = r"([^[.]*)"
@@ -95,13 +115,22 @@ class ChemperOperation(offsb.treedi.tree.TreeOperation):
         obj = self.source.db[self.source[target.index].payload]
         masks = obj["data"]
 
-        kwargs.update({
-            "masks": masks,
-            "mol": mol,
-            "name": self.name,
-            "entry": str(entry),
-            "chembit": self.chembit
-        })
+        kwargs.update(
+            {
+                "masks": masks,
+                "mol": mol,
+                "smi": smi,
+                "name": self.name,
+                "entry": str(entry),
+                "openff_compat": self.openff_compat,
+                "chembit": self.chembit,
+                "chemgraph": self.chemgraph,
+                "chemgraph_distinguish_hydrogen": self.chemgraph_distinguish_hydrogen,
+                "chemgraph_depth_limit": self.chemgraph_depth_limit,
+                "chemgraph_min_depth": self.chemgraph_min_depth,
+                "chemgraph_explicit_hydrogen": self.chemgraph_explicit_hydrogen,
+            }
+        )
         return kwargs
 
     @staticmethod
@@ -111,18 +140,31 @@ class ChemperOperation(offsb.treedi.tree.TreeOperation):
         i : int
             the identifying number of job
         target : EntryNode
-            A node that 
+            A node that
         """
         if "error" in kwargs:
             return {
                 target.payload: "Could not run Chemper:\n" + kwargs["error"],
                 "return": {"data": {}},
             }
-
         chembit = kwargs.get("chembit", False)
+        chemgraph = kwargs.get("chemgraph", False)
+        chemgraph_distinguish_hydrogen = kwargs.get(
+            "chemgraph_distinguish_hydrogen", True
+        )
+        chemgraph_depth_limit = kwargs.get("chemgraph_depth_limit", None)
+        chemgraph_min_depth = kwargs.get("chemgraph_min_depth", 0)
+        chemgraph_explicit_hydrogen = kwargs.get(
+            "chemgraph_explicit_hydrogen", False
+        )  # likely needed for vdW terms
+
+        openff_compat = kwargs.get("openff_compat", True)
+        smi = kwargs['smi']
 
         prim_to_graph = None
         if chembit:
+            import offsb.chem.types
+
             prim_to_graph = {
                 "n": offsb.chem.types.AtomType,
                 "b": offsb.chem.types.BondGraph,
@@ -141,42 +183,63 @@ class ChemperOperation(offsb.treedi.tree.TreeOperation):
         # chemper uses 0-indexing
         # map_inv = {v - 1: k for k, v in map_idx.items()}
         chemper = {}
-        for query, masks in all_masks.items():
-            for mask in map(tuple, masks):
-                # mapped_bond = tuple([map_inv[i] for i in mask])
-                # pat = ("name", [[mapped_bond]])
-                pat = ("name", [[mask]])
-                # with open("/dev/null", "w") as f:
-                #     with contextlib.redirect_stdout(f):
+        # for query, masks in all_masks.items():
+        #     for mask in map(tuple, masks):
+        #         # mapped_bond = tuple([map_inv[i] for i in mask])
+        #         # pat = ("name", [[mapped_bond]])
+        #         pat = ("name", [[mask]])
+        #         # with open("/dev/null", "w") as f:
+        #         #     with contextlib.redirect_stdout(f):
 
-                # If this fails, likely the indices were messed up
-                try:
-                    fier = SMIRKSifier([mol], [pat], verbose=False, max_layers=1)
-                    chemper[mask] = ChemperOperation._smirks_splitter(
-                        fier.current_smirks[0][1], len(mask)
-                    )
-                    if chembit:
+        #         # If this fails, likely the indices were messed up
+        #         try:
+        #             fier = SMIRKSifier([mol], [pat], verbose=False, max_layers=1)
+        #             chemper[mask] = ChemperOperation._smirks_splitter(
+        #                 fier.current_smirks[0][1], len(mask)
+        #             )
+        #             if chembit:
 
-                        ic_type = 0
-                        if len(mask) == 1:
-                            ic_type = 'n'
-                        if len(mask) == 2:
-                            ic_type = 'b'
-                        elif len(mask) == 3:
-                            ic_type = 'a'
-                        elif len(mask) == 4:
-                            if '(' in fier.current_smirks[0][1]:
-                                ic_type = 'i'
-                            else:
-                                ic_type = 't'
+        #                 ic_type = 0
+        #                 if len(mask) == 1:
+        #                     ic_type = "n"
+        #                 if len(mask) == 2:
+        #                     ic_type = "b"
+        #                 elif len(mask) == 3:
+        #                     ic_type = "a"
+        #                 elif len(mask) == 4:
+        #                     if "(" in fier.current_smirks[0][1]:
+        #                         ic_type = "i"
+        #                     else:
+        #                         ic_type = "t"
 
-                        chemper[mask] = prim_to_graph[ic_type].from_string_list(
-                            chemper[mask], sorted=True
-                        )
+        #                 chemper[mask] = prim_to_graph[ic_type].from_string_list(
+        #                     chemper[mask], sorted=True
+        #                 )
 
-                except Exception:
-                    breakpoint()
+        #         except Exception as e:
+        #             breakpoint()
+        #             print(e)
 
+        if chemgraph:
+            import offsb.chem.graph
+
+            M = offsb.chem.graph.MoleculeGraph.from_smiles(
+                smi,
+                distinguish_hydrogen=chemgraph_distinguish_hydrogen,
+                depth_limit=chemgraph_depth_limit,
+                min_depth=chemgraph_min_depth,
+                explicit_hydrogen=chemgraph_explicit_hydrogen,
+                openff_compat=openff_compat
+            )
+
+            # M = offsb.chem.graph.MoleculeGraph.from_ic_primitives(
+            #     chemper,
+            #     distinguish_hydrogen=chemgraph_distinguish_hydrogen,
+            #     depth_limit=chemgraph_depth_limit,
+            #     min_depth=chemgraph_min_depth,
+            #     explicit_hydrogen=chemgraph_explicit_hydrogen,
+            # )
+            chemper["graph"] = M
         return {target.payload: None, "return": {target.payload: {"data": chemper}}}
 
     def apply(self, targets=None):
@@ -252,102 +315,5 @@ class ChemperOperation(offsb.treedi.tree.TreeOperation):
                         chemper_inv[item].append(lbl)
                 for line in sorted(lines, key=lambda x: "".join(x.split()[1:])):
                     print(line)
-
-class AtomDescriminationOperation(offsb.treedi.tree.TreeOperation):
-    """
-    Attempts to make each atom as unique as possible given the chembi 
-    This means I need all bonds to operate
-    Then, in each entry, for each atom, I have a subgraph containing chembis
-    This means each atom is a "molecule graph"
-    Start with each atom and generate a graph, containing one node
-    Then iterate all molecules, making as many unique things as possible,
-    extending down into new levels only when necessary
-    definitely needs a tree of molecules
-    """
-
-    def __init__(self):
-        self.query = 2
-        self.chemper = 4
-        pass
-
-    def _unpack_result(self, val):
-        self.db.update(val)
-
-    def _generate_apply_kwargs(self, i, target, kwargs=None):
-
-        # labels = self.source.db[target.payload]["data"]
-        entry = self.source.source.db[target.payload]["data"]
-
-        if kwargs is None:
-            kwargs = {}
-
-        out_str = ""
-        smi = entry.attributes["canonical_isomeric_explicit_hydrogen_mapped_smiles"]
-        if "initial_molecule" in entry.dict():
-            qcid = entry.dict()["initial_molecule"]
-        elif "initial_molecules" in entry.dict():
-            qcid = entry.dict()["initial_molecules"]
-        else:
-            out_str += "{:d} initial mol was empty: {:s}".format(i, str(qcid))
-            return {"error": out_str}
-
-        if isinstance(qcid, set):
-            qcid = list(qcid)
-        if isinstance(qcid, list):
-            qcid = str(qcid[0])
-
-        qcmolid = "QCM-" + qcid
-
-        if qcmolid not in self.source.source.db:
-            out_str += "{:d} initial mol was empty: {:s}".format(i, str(qcmolid))
-            return {"error": out_str}
-
-        if "data" in self.source.source.db.get(qcmolid):
-            qcmol = self.source.source.db.get(qcmolid).get("data")
-        else:
-            out_str += "{:d} initial mol was empty: {:s}".format(i, str(qcmolid))
-            return {"error": out_str}
-
-        mol = offsb.rdutil.mol.rdmol_from_smiles_and_qcmol(smi, qcmol)
-
-        obj = self.source.db[self.source[target.index].payload]
-        masks = obj["data"]
-
-        kwargs.update({
-            "masks": masks,
-            "mol": mol,
-            "name": self.name,
-            "entry": str(entry),
-            "chembit": self.chembit
-        })
-        return kwargs
-
-    def _check_if_done(self):
-        return True
-
-    def apply(self, targets=None):
-        # apply using a parallel reduction; is this going to be too expensive for
-        # larger datasets?
-        while True:
-            super().apply()
-            if self._check_if_done():
-                break
-
-    @staticmethod
-    def apply_single(i, target, **kwargs):
-        """
-        uniquify a single molecule, using a reference list to check for existing patterns
-        so this will generate the entire tree for a molecule
-        
-        then, it does another round with another group to combine
-
-
-        
-
-        """
-        pass
-
-    def op(self, target, partition):
-        pass
 
 

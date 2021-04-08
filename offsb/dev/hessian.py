@@ -709,8 +709,8 @@ def hessian_modes( hess, xyz, mass, mol_number, remove=0, stdtr=False):
 
     return mol_modes, converteig(freq_ic)
 
-if 1:
-    angle_freq_file = open("angle_freq.txt", 'w')
+if 0:
+    # angle_freq_file = open("angle_freq.txt", 'w')
     for mol_number, mol_name in enumerate(sys.argv[1:]):
         
 
@@ -875,7 +875,7 @@ if 1:
             #print(c0, c1, c2,E[0][i], implied_k[srt[i]])    
             print(c0, c1, c2, c3, oFF_labels[srt[i]])    
             fid.write("{:3s} {:12.5f}\n".format(oFF_labels[srt[i]], implied_k[srt[i]]))
-            angle_freq_file.write("{:3s} {:9.4f} {:9.4f} {:s}\n".format(oFF_labels[srt[i]], implied_k[srt[i]], values[srt[i]], mol_key))
+            # angle_freq_file.write("{:3s} {:9.4f} {:9.4f} {:s}\n".format(oFF_labels[srt[i]], implied_k[srt[i]], values[srt[i]], mol_key))
             tbl_dat.append([c0, c1, c2, c3])
         if(n_modes > n_IC):
             for i in range(n_IC, n_modes):
@@ -898,7 +898,7 @@ if 1:
                 c3 = "{:9.2f}".format(implied_k[srt[i]])
                 print(c0, c1, c2, c3, oFF_labels[srt[i]])    
                 fid.write("{:3s} {:12.5f}\n".format(oFF_labels[srt[i]], implied_k[srt[i]]))
-                angle_freq_file.write("{:3s} {:9.4f} {:9.4f} {:s}\n".format(oFF_labels[srt[i]], implied_k[srt[i]], values[srt[i]], mol_key))
+                # angle_freq_file.write("{:3s} {:9.4f} {:9.4f} {:s}\n".format(oFF_labels[srt[i]], implied_k[srt[i]], values[srt[i]], mol_key))
                 tbl_dat.append([c0, c1, c2, c3])
         fid.close()
 
@@ -951,7 +951,7 @@ if 1:
         fig.suptitle("Projection of normed Cartesian modes and B (abs. val.) for smiles "+mol_key)
         fig.savefig("test_ic."+mol_name+".png")
         plt.close(fig)
-    angle_freq_file.close()
+    # angle_freq_file.close()
 
 if 0:
     with open("db.pickle", 'rb') as fid:

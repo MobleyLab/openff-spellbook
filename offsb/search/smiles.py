@@ -11,6 +11,8 @@ import offsb.treedi.tree as Tree
 from rdkit import Chem
 import logging
 
+from offsb.api.tk import ValenceDict, ImproperDict
+
 DEFAULT_DB = Tree.DEFAULT_DB
 
 
@@ -38,6 +40,7 @@ class SmilesSearchTree(Tree.PartitionTree):
             self.logger.setLevel(logging.INFO)
         else:
             self.logger.setLevel(logging.WARNING)
+        self.valence = False
 
     def apply(self, targets=None):
         if targets is None:
@@ -91,6 +94,9 @@ class SmilesSearchTree(Tree.PartitionTree):
             # mol = Chem.AddHs(mol)
             # link_node = self.node_index.get( target.index)
             results = DEFAULT_DB()
+            match_kwargs={}
+            if self.valence:
+                match_kwargs.update(dict(uniquify=False, useChirality=True))
             # oid = id(results)
             # self.logger.debug("Creating SMI results db id {}".format(oid))
             # breakpoint()
@@ -100,7 +106,7 @@ class SmilesSearchTree(Tree.PartitionTree):
                     mol_hits[smi] += 1
                     map_idx = {a.GetIdx(): a.GetAtomMapNum() for a in mol.GetAtoms()}
                     map_inv = {v - 1: k for k, v in map_idx.items()}
-                    for match in mol.GetSubstructMatches(qmol):
+                    for match in mol.GetSubstructMatches(qmol, **match_kwargs):
                         # deg = mol.GetAtomWithIdx(match[0]).GetDegree()
                         # if(not (mol_smiles in matches)):
                         #    matches[mol_smiles] = []
@@ -109,7 +115,16 @@ class SmilesSearchTree(Tree.PartitionTree):
                             mapped_match = [mapped_match[x] for x in map_list]
 
                         mapped_match = tuple(map_inv[i] for i in mapped_match)
+                        if self.valence:
+                            fn = ValenceDict.key_transform
+
+                            if "(" in smi:
+                                fn = ImproperDict.key_transform
+
+                            fn(mapped_match)
+
                         matches.append(mapped_match)
+
                         hits[smi] += 1
                 results[smi] = matches
 

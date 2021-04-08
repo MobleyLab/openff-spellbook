@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 import rdkit.Chem.Draw
+from offsb.tools import const, util
 from rdkit import Chem
 from rdkit import Geometry as RDGeom
 from rdkit.Chem import AllChem, FragmentMatcher
 from rdkit.Chem.rdchem import Conformer
-
-from offsb.tools import const
-from offsb.tools import util
 
 
 def atom_map(mol):
@@ -18,21 +16,48 @@ def atom_map(mol):
 
 
 def atom_map_invert(map_idx):
-    inv = {v - 1: k for k,v in map_idx.items()}
+    inv = {v - 1: k for k, v in map_idx.items()}
     return inv
 
 
-def build_from_smiles(smiles_pattern):
+def build_from_smiles(smiles_pattern, protonate=False, openff_compatible=True):
+
     mol = Chem.MolFromSmiles(smiles_pattern, sanitize=False)
-    Chem.SanitizeMol(
-        mol,
-        Chem.SanitizeFlags.SANITIZE_ALL
-        ^ Chem.SanitizeFlags.SANITIZE_ADJUSTHS
-        ^ Chem.SanitizeFlags.SANITIZE_SETAROMATICITY,
-    )
+
+    flags = Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_SETAROMATICITY
+
+    if not protonate:
+        flags ^= Chem.SanitizeFlags.SANITIZE_ADJUSTHS
+
+    Chem.SanitizeMol(mol, flags)
+
+    if protonate:
+        mol = Chem.AddHs(mol)
+
     Chem.SetAromaticity(mol, Chem.AromaticityModel.AROMATICITY_MDL)
     Chem.SanitizeMol(mol, Chem.SanitizeFlags.SANITIZE_SETAROMATICITY)
+
+    if openff_compatible:
+        # Needed since the TK doesn't like float bond orders
+        # This means it will essentially throw out the : specifier?
+        Chem.Kekulize(mol)
+
     return mol
+
+
+def build_from_smarts(smarts_pattern):
+
+    mol = Chem.MolFromSmarts(smarts_pattern)
+
+    flags = Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_SETAROMATICITY ^ Chem.SanitizeFlags.SANITIZE_ADJUSTHS
+
+    Chem.SanitizeMol(mol, flags)
+
+    Chem.SetAromaticity(mol, Chem.AromaticityModel.AROMATICITY_MDL)
+    Chem.SanitizeMol(mol, Chem.SanitizeFlags.SANITIZE_SETAROMATICITY)
+
+    return mol
+
 
 def _embed(mol, xyz):
     map_idx = atom_map(mol)
@@ -48,15 +73,18 @@ def _embed(mol, xyz):
     # not sure if this can fail, so just accept anything
     return ret
 
+
 def embed_qcmol_3d(mol, qcmol):
 
     xyz = qcmol.geometry * const.bohr2angstrom
     return _embed(mol, xyz)
 
+
 def embed_xyz(mol, xyz_in_ang):
 
     xyz = xyz_in_ang
     return _embed(mol, xyz)
+
 
 def embed_xyz_file(mol, xyz_file):
 
@@ -66,6 +94,7 @@ def embed_xyz_file(mol, xyz_file):
         i = _embed(mol, frame)
         ids.append(i)
     return ids
+
 
 def rdmol_from_smiles_and_qcmol(smiles_pattern, qcmol):
 
@@ -78,6 +107,7 @@ def rdmol_from_smiles_and_qcmol(smiles_pattern, qcmol):
     Chem.rdmolops.AssignAtomChiralTagsFromStructure(mol, id, replaceExistingTags=True)
 
     return mol
+
 
 def save2d(rdmol, fname=None, indices=False, rdkwargs=None, rdoption_properties=None):
 
@@ -93,7 +123,7 @@ def save2d(rdmol, fname=None, indices=False, rdkwargs=None, rdoption_properties=
         mapnum = [m.GetAtomMapNum() for m in rdmol.GetAtoms()]
         if not all(mapnum):
             for atom in rdmol.GetAtoms():
-                atom.SetAtomMapNum(atom.GetIdx()+1)
+                atom.SetAtomMapNum(atom.GetIdx() + 1)
     if rdkwargs is None:
         rdkwargs = {}
     size = rdkwargs.pop("size", (500, 500))
@@ -103,13 +133,10 @@ def save2d(rdmol, fname=None, indices=False, rdkwargs=None, rdoption_properties=
 
     # options.fixedBondLength = 20.0
     options.explictMethyl = True
-    options.fixedScale = .1
+    options.fixedScale = 0.1
     options.flagCloseContactsDist = 3
     image = rdkit.Chem.Draw.MolToImage(
-        rdmol,
-        size=size,
-        drawingOptions=options,
-        **rdkwargs
+        rdmol, size=size, drawingOptions=options, **rdkwargs
     )
     if fname is None:
         return image
