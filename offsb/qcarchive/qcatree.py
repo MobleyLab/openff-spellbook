@@ -59,19 +59,27 @@ def wrap_fn_hessian(fn, i, j, **kwargs):
     return objs
     # return objs, out_str, N
 
+class QCAFilterList(list):
+    def __init__(self):
+
+        self.invert = False
+
+    def __contains__(self, o):
+        return False if not self else super().__contains__(o) ^ self.invert
 
 class QCAFilter:
 
-    __slots__ = ["types", "smarts", "entries", "records", "datasets", "payloads"]
+    __slots__ = ["types", "smarts", "entries", "records", "procedures", "datasets", "payloads"]
 
     def __init__(self):
 
-        self.types = []
-        self.smarts = []
-        self.entries = []
-        self.records = []
-        self.datasets = []
-        self.payloads = []
+        self.types = QCAFilterList()
+        self.smarts = QCAFilterList()
+        self.entries = QCAFilterList()
+        self.records = QCAFilterList()
+        self.procedures = QCAFilterList()
+        self.datasets = QCAFilterList()
+        self.payloads = QCAFilterList()
 
     @classmethod
     def from_file(cls, fnm):
@@ -902,8 +910,8 @@ class QCATree(Tree.Tree):
         ids = flatten_list(list(spec_map_ids.values()), times=-1)
 
         n_ids = len(ids)
-        filtered_ids = [i for i in ids if i.split("-")[1] in self.drop.records]
-        ids = [i for i in ids if i.split("-")[1] not in self.drop.records]
+        filtered_ids = [i for i in ids if i.split("-")[1] in self.drop.procedures]
+        ids = [i for i in ids if i.split("-")[1] not in self.drop.procedures]
         n_filtered = n_ids - len(ids)
 
         print("Downloading", name, "information for", len(ids), end=" ")
